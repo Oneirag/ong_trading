@@ -1,7 +1,8 @@
 # Tensorflow in mac m1 (follow https://developer.apple.com/metal/tensorflow-plugin/):
 # conda install -c apple tensorflow-deps
-tensorflow-macos
-tensorflow-metal
+tensorflow-macos; sys_platform == "darwin"
+tensorflow-metal; sys_platform == "darwin"
+intel-tensorflow; sys_platform != "darwin"
 gym[all]        # open-ai gym
 sklearn
 seaborn     # nice plots

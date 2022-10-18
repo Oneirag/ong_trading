@@ -100,9 +100,9 @@ class DDQNAgent:
         self.total_steps += 1
         if np.random.rand() <= self.epsilon:
             return np.random.choice(self.num_actions)
-        q = self.online_network.predict(state, verbose=0)
+        # q = self.online_network.predict(state, verbose=0)
         # q = self.online_network.predict_on_batch(state.reshape(1, self.state_dim))
-        # q = self.online_network(state.reshape(1, self.state_dim), training=False)
+        q = self.online_network(state.reshape(1, self.state_dim), training=False)
         return np.argmax(q, axis=1).squeeze()
 
     def memorize_transition(self, s, a, r, s_prime, not_done):
