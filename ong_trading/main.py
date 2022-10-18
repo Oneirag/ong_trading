@@ -1,20 +1,18 @@
 """
 Based on https://www.quantstart.com/articles/Event-Driven-Backtesting-with-Python-Part-I/
 """
-import time
 from queue import Queue, Empty
 from itertools import product
 import pandas as pd
 from ong_utils import OngTimer
 
 
-from ong_trading.data import YahooHistoricalData
-from ong_trading import logger
-from ong_trading.strategy import BuyAndHoldStrategy, MACrossOverStrategy
-from ong_trading.portfolio import NaivePortfolio, BasePortfolio
-from ong_trading.execution import SimulatedExecutionHandler, SimulatedBroker
-from ong_trading.utils import InstrumentType
-from ong_trading.event import MarketEvent, SignalEvent, OrderEvent, FillEvent, UserNotifyEvent
+from ong_trading.event_driven.data import YahooHistoricalData
+from ong_trading.strategy.strategy import MACrossOverStrategy
+from ong_trading.event_driven.portfolio import NaivePortfolio
+from ong_trading.event_driven.execution import SimulatedBroker
+from ong_trading.helpers import InstrumentType
+from ong_trading.event_driven.event import MarketEvent, SignalEvent, OrderEvent, FillEvent, UserNotifyEvent
 
 events = Queue()
 
@@ -43,7 +41,7 @@ for param in params:
     strategy = MACrossOverStrategy(bars, events, short=short, long=long)
     with OngTimer(msg=f"Iteration for {param}"):
         while True:
-            # Update the bars (specific backtest code, as opposed to live trading)
+            # Update the bars (specific event_driven event_driven, as opposed to live trading)
             if bars.continue_backtest:
                 bars.update_bars()
             else:

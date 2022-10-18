@@ -1,5 +1,6 @@
 """
-This module does nothing at the moment
+This module contains several instruments (Stocks, CfD)
+and methods for valuating them
 """
 import warnings
 from abc import ABC, abstractmethod
@@ -7,9 +8,9 @@ import numpy as np
 import pandas as pd
 from dataclasses import dataclass
 
-from ong_trading.data import Bar
-from ong_trading.exceptions import PositionBelowMinimumException, NoCashException
-from ong_trading.rates import Rates
+from ong_trading.event_driven.data import Bar
+from ong_trading.event_driven.exceptions import PositionBelowMinimumException, NoCashException
+from ong_trading.event_driven.rates import Rates
 
 
 @dataclass
@@ -26,6 +27,10 @@ def calculate_trade_price(new_position: float, bid: float, offer: float) -> floa
 
 
 class Instrument(ABC):
+    """
+    Base class for a generic instrument. Includes methods for trading, calculating Mark-To-Market, dividend management
+    and end of day calculations
+    """
     def __init__(self, min_position, rates: Rates = None):
         """
         Creates an instrument. Rates are needed to compute financing costs
@@ -155,6 +160,10 @@ class Instrument(ABC):
 
 
 class StockInstrument(Instrument):
+    """
+    Instrument for dealing with stocks. It does not allow short positions
+    """
+
     def __init__(self):
         super().__init__(min_position=0)
 
@@ -164,7 +173,6 @@ class StockInstrument(Instrument):
     def new_day(self, last_bar: Bar, dividend: float = 0) -> None:
         super(StockInstrument, self).new_day(last_bar, dividend)
         self.last_day = last_bar.timestamp
-        # self.total_commission += 0
 
     def adjust_dividends(self) -> float:
         return 0  # Dividends must not be adjusted for a stock
@@ -188,6 +196,11 @@ class StockTobinInstrument(StockInstrument):
 
 
 class CfDInstrument(Instrument):
+    """
+    A contract for differences instrument (leveraged).
+    Position can be either short or long, the cash needed to open the position is just the bid-offer and
+    dividends are neutral (a cfd cannot make neither profit nor loss out a planned dividend yield).
+    """
 
     def __init__(self, rates: Rates):
         """
@@ -196,34 +209,38 @@ class CfDInstrument(Instrument):
         super(CfDInstrument, self).__init__(min_position=-np.Inf, rates=rates)
 
     def calculate_trade_commissions(self, trade_price: float, closing_volume: float, opening_volume: float) -> float:
+        """CfD has no commission by default. If needed, it should be changed in a child class"""
         return 0    # No trade commission
 
     def calculate_required_cash(self, trade_nominal: float, mtm: float) -> float:
+        """Returns just mark-to-market (which at trade inception is just the bid-offer spread) is required"""
         return mtm
 
     def adjust_dividends(self) -> float:
+        """CfD must remove any effect in mtm of dividends, so this adjust is the total amount of dividends received"""
         return self.total_dividends  # For a CfD dividends must be removed
 
 
 class IgCfDInstrument(CfDInstrument):
+    """
+    CfD with the overnight cost of IG markets broker
+    """
+
+    _default_sofr = 0.0124          # Default sofr in case rates could not be downloaded
+    _lending_cost = 0.006           # Lending cost (it could vary over time, but a fixed value is used here)
 
     def new_day(self, last_bar: Bar, dividend: float = 0) -> None:
-        # overnight cost
-        nights = (self.last_day - last_bar.timestamp).days
+        """Computes overnight cost for open positions as calculated by IG Markets"""
+        if self.position != 0:
+            nights = (self.last_day - last_bar.timestamp).days
+            position = self.position
+            price = last_bar.close  # TODO: consider bid/ask, but this can be a good enough solution
+            if self.rates is None:
+                warnings.warn("No rates found: Falling back to 1.24%")
+                sofr = self._default_sofr
+            else:
+                sofr = self.rates.sofr[last_bar.timestamp]
+            self._total_others += nights * position * price * (0.025 - sofr) / 360
+            self._total_others += nights * position * price * self._lending_cost / 360
         self.last_day = last_bar.timestamp
-        position = self.position
-        price = last_bar.close  # TODO: consider bid/ask
-        if self.rates is None:
-            warnings.warn("No rates found")
-            sofr = 0.0124
-        else:
-            sofr = self.rates.sofr[last_bar.timestamp]
-        self._total_others += nights * position * price * (0.025 - sofr) / 360
-        # lending cost
-        lend_cost = 0.006
-        self._total_others += nights * position * price * lend_cost / 360
-
         super(CfDInstrument, self).new_day(last_bar)
-
-    def adjust_dividends(self) -> float:
-        return self.total_dividends  # For a CfD dividends must be removed

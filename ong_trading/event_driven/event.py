@@ -17,7 +17,7 @@ FillEvent - When an ExecutionHandler receives an OrderEvent it must transact the
 """
 
 from ong_trading import logger
-from .utils import InstrumentType
+from ong_trading.event_driven.utils import InstrumentType
 
 
 class Event(object):

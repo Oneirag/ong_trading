@@ -14,8 +14,7 @@ import pandas as pd
 import yfinance as yf
 
 from ong_trading import logger
-from ong_trading.event import MarketEvent
-from ong_trading.rates import Rates
+from ong_trading.event_driven.event import MarketEvent
 
 
 @dataclass
@@ -57,6 +56,9 @@ class DataHandler(ABC):
     """
     logger = logger
 
+    def __init__(self):
+        self.continue_backtest = True   # For event_driven to work in any child class
+
     @abstractmethod
     def get_latest_bars(self, symbol, N=1):
         """
@@ -96,14 +98,14 @@ class HistoricCSVDataHandler(DataHandler):
         symbol_list - A list of symbol strings.
         bid_offer: a dict of bid_offer spreads indexed for each symbol
         """
+        super().__init__()
+
         self.events = events
         self.csv_dir = csv_dir
         self.symbol_list = symbol_list
 
         self.symbol_data = {}
         self.latest_symbol_data = {}
-        self.continue_backtest = True
-
         self.names = ['datetime', 'open', 'low', 'high', 'close', 'volume', 'oi',
                       'dividends', 'stock splits']
         self.bid_offer = bid_offer or {s: 0 for s in self.symbol_list}
@@ -199,12 +201,23 @@ class HistoricCSVDataHandler(DataHandler):
                     #self.events.put(MarketEvent(timestamp=bar[1]))
 
     def reset(self):
-        """Reset the state of bars so a new backtest can start without reading again all data"""
+        """Reset the state of bars so a new event_driven can start without reading again all data"""
         self.continue_backtest = True
         self.latest_symbol_data = {s: list() for s in self.symbol_list}
 
         for s in self.symbol_list:
             self.bar_data_iterator[s] = iter(self.bar_data[s])
+
+    @property
+    def n_bars(self) -> int:
+        """Gets the total number of bars (needed for splitting data for backtesting)"""
+        return len(self.bar_data[self.symbol_list[0]])
+
+    def to_pandas(self, symbol) -> pd.DataFrame:
+        """Gets all historical data of a certain symbol as a pandas DataFrame indexed by timestamp"""
+        df = pd.DataFrame(pd.DataFrame(self.bar_data[symbol]))
+        df.set_index("timestamp", inplace=True)
+        return df
 
 
 class YahooHistoricalData(HistoricCSVDataHandler):
@@ -213,8 +226,8 @@ class YahooHistoricalData(HistoricCSVDataHandler):
     def __init__(self, events, symbol_list: list, period="max", bid_offer: dict = None):
         """
         Initializes symbols
-        :param events:
-        :param symbol_list:
+        :param events: a queue for sending events
+        :param symbol_list: list of symbols to download
         :param period: period to pass to method history of a yahoo finance Ticker object (defaults to "max")
         :param bid_offer: A dictionary indexed by symbol with half of the bid_offer (the number to add/substract from
         mid to calculate ask or bid respectively). By default, 0

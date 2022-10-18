@@ -14,6 +14,7 @@ class InstrumentType(Enum):
 class DirectionType(Enum):
     BUY = 1
     SELL = -1
+    NEUTRAL = 0
 
 
 def plot_chart(fig, x, y, name: str, symbol: str, row: int, col: int, signals: pd.Series = None):

@@ -3,18 +3,14 @@ Based on https://www.quantstart.com/articles/Event-Driven-Backtesting-with-Pytho
 """
 # portfolio.py
 
-import datetime
-import numpy as np
 import pandas as pd
-import queue
 
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from math import floor
 
-from .event import FillEvent, OrderEvent, SignalEvent, MarketEvent
+from ong_trading.event_driven.event import FillEvent, OrderEvent, SignalEvent, MarketEvent
 from .performance import create_sharpe_ratio, create_drawdowns
-from .utils import InstrumentType, DirectionType, plot_chart
+from ong_trading.event_driven.utils import InstrumentType, DirectionType, plot_chart
 
 
 class Portfolio(ABC):
@@ -301,7 +297,7 @@ class NaivePortfolio_OLD(Portfolio):
         cur_quantity = self.current_positions[symbol]
         order_type = 'MKT'
 
-        # TODO: change this behavior: the signal should give the desired position and this code translate into orders
+        # TODO: change this behavior: the signal should give the desired position and this event_driven translate into orders
         if direction == DirectionType.BUY and cur_quantity == 0:
             order = OrderEvent(symbol, order_type, mkt_quantity, 'BUY')
         elif direction == DirectionType.SELL and cur_quantity == 0:
@@ -632,7 +628,9 @@ class NaivePortfolio(Portfolio):
         stats = [("Total Return %",  ((total_return - 1.0) * 100.0)),
                  ("Sharpe Ratio",  sharpe_ratio),
                  ("Max Drawdown %",  (max_dd * 100.0)),
-                 ("Drawdown Duration", dd_duration)]
+                 ("Drawdown Duration", dd_duration),
+                 ("Total Return", returns[-1])
+                 ]
 
         if plot:
             df_pos = pd.DataFrame(self.all_positions)

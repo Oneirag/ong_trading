@@ -1,7 +1,7 @@
 import unittest
 from queue import Queue
 from ong_utils import OngTimer
-from ong_trading.data import YahooHistoricalData
+from ong_trading.event_driven.data import YahooHistoricalData
 
 
 class TestData(unittest.TestCase):

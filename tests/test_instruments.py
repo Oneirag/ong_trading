@@ -2,14 +2,16 @@
 Tests for instruments: check correct bid-offer application, cost calculations...
 """
 import unittest
+from time import time
 
 import numpy as np
 import pandas as pd
 from queue import Queue
 
-from ong_trading.instruments import CfDInstrument, StockInstrument, StockTobinInstrument
-from ong_trading.exceptions import PositionBelowMinimumException
-from ong_trading.data import GeneratedHistoricalData
+from ong_trading.event_driven.instruments import CfDInstrument, StockInstrument, StockTobinInstrument
+from ong_trading.event_driven.exceptions import PositionBelowMinimumException
+from ong_trading.event_driven.data import GeneratedHistoricalData
+from ong_trading.vectorized.pnl import pnl_positions, calculate_entry_points_vectorized, calculate_entry_points
 from functools import partial
 
 
@@ -157,6 +159,8 @@ class TestInstruments(unittest.TestCase):
                 t = 0
                 expected_position_list = list()
                 closings = list()
+                bids = list()
+                asks = list()
                 mtms = list()
                 expected_positions_copy = expected_position_case.copy()
                 while self.data.continue_backtest:
@@ -167,6 +171,8 @@ class TestInstruments(unittest.TestCase):
                         expected_position = max(0, expected_position)
                     expected_position_list.append(expected_position)
                     closings.append(last_bar.close)
+                    bids.append(last_bar.close_bid)
+                    asks.append(last_bar.close_ask)
                     inst.trade(self.equity, expected_position - inst.position, last_bar.close_bid, last_bar.close_ask,
                                last_bar.timestamp)
                     mtm = inst.mtm(last_bar.close_bid, last_bar.close_ask)
@@ -181,29 +187,38 @@ class TestInstruments(unittest.TestCase):
                 # Calculate mtm
                 np_prices = np.array(closings)
                 np_positions = np.array(expected_position_list)
+                # calculate vectorized_pnl
+                vectorized_pnl = pnl_positions(np_positions, np.array(bids), np.array(asks))
+
                 # Without bid/offer
                 calc_mtms_without_bidoffer = np.zeros_like(np_positions)
                 calc_mtms_without_bidoffer[1:] = np.cumsum(np_positions[:-1] * np.diff(np_prices))
                 # Calculate entry points
-                entry_points = list()
-                for i in range(len(np_positions)):
-                    entry_points.append(0)
-                    if i == 0 and np_positions[0] != 0:
-                        entry_points[i] = abs(np_positions[0])
-                    # If close position
-                    elif np.sign(np_positions[i - 1]) != np.sign(np_positions[i]) and np_positions[i] != 0:
-                        entry_points[i] = abs(np_positions[i])
-                    # if increase position
-                    elif abs(np_positions[i]) > abs(np_positions[i - 1]):
-                        entry_points[i] = abs(np_positions[i]) - abs(np_positions[i - 1])
-                entry_points = np.array(entry_points)
+                entry_points = calculate_entry_points(np_positions)
                 bid_offer_value = -np.cumsum(entry_points * self.bid_offer * 2)
                 # Including effect of bid/offer
                 calc_mtms = calc_mtms_without_bidoffer + bid_offer_value
                 self.assertSequenceEqual(mtms, calc_mtms.tolist(), f"Bad pnl found for instrument '{instrument_name}' "
                                                                    f"in case '{case}'. "
                                                                    f"{entry_points=} {calc_mtms_without_bidoffer=}")
+                self.assertSequenceEqual(vectorized_pnl.tolist(), calc_mtms.tolist(),
+                                                                   f"Bad vectorized pnl found for instrument '{instrument_name}' "
+                                                                   f"in case '{case}'. "
+                                                                   f"{entry_points=} {calc_mtms_without_bidoffer=}")
                 self.data.reset()
+
+    def test_vectorized_pnl(self):
+        """Tests calculation of vectorized pnl vs rule-based one: time to calculate and same result"""
+        n = 3000
+        iterations = 1000
+        positions = np.random.rand(n) * 2 - 1
+        for function in (calculate_entry_points, calculate_entry_points_vectorized):
+            tic = time()
+            for _ in range(iterations):
+                function(positions)
+            res = time() - tic
+            print(f"Elapsed time for {function.__name__}: {res:.3f}s")
+        self.assertTrue(np.all(calculate_entry_points(positions) == calculate_entry_points_vectorized(positions)))
 
     def test_position_change(self):
 

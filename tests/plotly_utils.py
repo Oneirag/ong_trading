@@ -1,7 +1,7 @@
 import pandas as pd
 from time import time
 
-from ong_trading.utils import plot_chart
+from ong_trading.helpers import plot_chart
 
 if __name__ == '__main__':
     import numpy as np
