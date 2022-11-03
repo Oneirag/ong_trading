@@ -84,6 +84,43 @@ class OrderEvent(Event):
     quantity and a direction.
     """
 
+    def __init__(self, symbol, limit_price, quantity,
+                 instrument: InstrumentType = InstrumentType.Stock):
+        """
+        Initialises the order type, setting whether it is
+        a Market order ('MKT') or Limit order ('LMT'), has
+        a quantity (integral) and its direction ('BUY' or
+        'SELL').
+
+        Parameters:
+        symbol - The instrument to trade.
+        limit_price - If None, it is a market order (to execute immediately), otherwise it has an execution price
+        quantity - Integer for quantity (negative for SELL/SHORT, positive por BUY/LONG)
+        instrument - "Stocks" or "CFD" for a physical or financial deal
+        """
+
+        super().__init__()
+        self.symbol = symbol
+        self.limit_price = limit_price
+        self.quantity = quantity
+        self.instrument = instrument
+
+    def print_order(self):
+        """
+        Outputs the values within the Order.
+        """
+        msg = f"Order: Symbol={self.symbol} Limit={self.limit_price}, Quantity={self.quantity}, " \
+              f"instrument={self.instrument}"
+        self.logger.info(msg)
+
+
+class OrderEventOLD(Event):
+    """
+    Handles the event of sending an Order to an execution system.
+    The order contains a symbol (e.g. GOOG), a type (market or limit),
+    quantity and a direction.
+    """
+
     def __init__(self, symbol, limit_price, quantity, direction,
                  instrument: InstrumentType = InstrumentType.Stock):
         """
@@ -125,7 +162,7 @@ class FillEvent(Event):
     """
 
     def __init__(self, timeindex, symbol, exchange, quantity,
-                 direction, fill_cost, price, commission=None):
+                 fill_cost, price, commission=None):
         """
         Initialises the FillEvent object. Sets the symbol, exchange,
         quantity, direction, cost of fill and an optional
@@ -139,8 +176,7 @@ class FillEvent(Event):
         timeindex - The bar-resolution when the order was filled.
         symbol - The instrument which was filled.
         exchange - The exchange where the order was filled.
-        quantity - The filled quantity.
-        direction - The direction of fill ('BUY' or 'SELL')
+        quantity - The filled quantity (<0 for short/sell, >0 for buy/long)
         fill_cost - The holdings value in dollars.
         price - The price at which deal was closed
         commission - An optional commission sent from IB.
@@ -151,8 +187,6 @@ class FillEvent(Event):
         self.symbol = symbol
         self.exchange = exchange
         self.quantity = quantity
-        self.direction = direction
-        self.position = direction.value
 
         self.fill_cost = fill_cost
         self.price = price
@@ -178,11 +212,12 @@ class FillEvent(Event):
             return None
 
         full_cost = 1.3
-        if self.quantity <= 500:
-            full_cost = max(1.3, 0.013 * self.quantity)
+        quantity = abs(self.quantity)
+        if quantity <= 500:
+            full_cost = max(1.3, 0.013 * quantity)
         else:  # Greater than 500
-            full_cost = max(1.3, 0.008 * self.quantity)
-        full_cost = min(full_cost, 0.5 / 100.0 * self.quantity * self.fill_cost)
+            full_cost = max(1.3, 0.008 * quantity)
+        full_cost = min(full_cost, 0.5 / 100.0 * quantity * self.fill_cost)
         return full_cost
 
 

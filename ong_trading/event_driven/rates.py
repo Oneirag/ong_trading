@@ -32,9 +32,13 @@ class Rates:
         self._iso_date_from = self._date_from.isoformat()[:10]
         self._iso_date_to = self._date_to.isoformat()[:10]
         self.__pool = create_pool_manager()
+        if index is not None:
+            index = pd.DatetimeIndex(index)
 
         # Download data
         def reindex_data(data):
+            if data.index.tz != index.tz:
+                data.index = data.index.tz_localize(index.tz)
             return data.reindex(index=index, method="pad") / 100   # Align with indexes and normalice value
 
         self.sofr = reindex_data(self.get_sofr())

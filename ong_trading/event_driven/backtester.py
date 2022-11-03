@@ -1,49 +1,65 @@
 """
 Class to wrap basic backtesting
 """
+from __future__ import annotations
+
+import logging
 from itertools import product
 from typing import Type
 
-from ong_trading.event_driven.data import DataHandler
-from ong_trading.event_driven.portfolio import Portfolio, NaivePortfolio
+from queue import Queue, Empty
+import pandas as pd
+from ong_trading import logger
+from ong_trading.event_driven.data import DataHandler, HistoricCSVDataHandler, YahooHistoricalData
+from ong_trading.event_driven.portfolio import NaivePortfolio
 from ong_trading.strategy.strategy import Strategy
-from ong_trading.event_driven.execution import ExecutionHandler, SimulatedBroker
+from ong_trading.event_driven.execution import SimulatedBroker
 from ong_trading.event_driven.event import FillEvent, OrderEvent, SignalEvent, MarketEvent, UserNotifyEvent
 from ong_trading.helpers.overload import singledispatch
-from ong_trading import logger
-from queue import Queue, Empty
 from ong_trading.event_driven.utils import InstrumentType
-import pandas as pd
 
 
 class Backtester:
 
-    def __init__(self, data_class: Type[DataHandler],
-                 portfolio_class: Type[NaivePortfolio],
-                 strategy_class: Type[Strategy],
-                 broker_class: Type[SimulatedBroker],
-                 symbol_list,
-                 cash: float,
-                 instrument_type: InstrumentType,
-                 start_date: pd.Timestamp):
+    def __init__(self, cash: float, symbol_list: str | list | tuple, strategy_class: Type[Strategy],
+                 start_date: pd.Timestamp | str = None, end_date: pd.Timestamp | str = None,
+                 data_class: Type[HistoricCSVDataHandler] = YahooHistoricalData,
+                 portfolio_class: Type[NaivePortfolio] = NaivePortfolio,
+                 broker_class: Type[SimulatedBroker] = SimulatedBroker,
+                 instrument_type: InstrumentType = InstrumentType.CfD,
+                 strategy_args: list = None, strategy_kwargs: dict = None):
+        """
+        Initializes an event-driven backtester
+        :param cash: initial amount of cash
+        :param symbol_list: name (or list of names) of the ticker(s) to use for backtesting
+        :param strategy_class: class to use for the strategy
+        :param start_date: start date of the backtest (defaults to None, all data available)
+        :param start_date: end date of the backtest (defaults to None, all data available)
+        :param data_class: class for collecting data. Defaults to YahooHistoricalData
+        :param portfolio_class: portfolio class for backtesting. Defaults to NaivePortfolio
+        :param broker_class: broker class for backtesting. Defaults to SimulatedBroker
+        :param instrument_type: instrument type for backtesting. Defaults to InstrumentType.CfD
+        :param strategy_args: list of additional *args for strategy_class constructor
+        :param strategy_kwargs: dict of additional **kwargs for strategy_class constructor
+
+        """
         self.events = Queue()
         self.cash = cash
 
-        # bars = YahooHistoricalData(events=None, symbol_list=["ELE.MC"])
-        # broker = SimulatedBroker(bars=None, events=None, cash=cash)
-        # port = NaivePortfolio(broker=None, bars=None, events=None, start_date="2010-01-01",
-        #                       instrument=InstrumentType.CfD,
-        #                       initial_capital=cash)
-        # strategy = MACrossOverStrategy(bars=None, events=None, short=3, long=7)
-
         self.symbol_list = symbol_list
         self.instrument_type = instrument_type
-        self.start_date = start_date
+        self.start_date = pd.Timestamp(start_date) if start_date is not None else None
+        self.end_date = pd.Timestamp(end_date) if end_date is not None else None
         self.data_class = data_class
         self.broker_class = broker_class
         self.portfolio_class = portfolio_class
         self.strategy_class = strategy_class
-        self.data = self.data_class(self.events, self.symbol_list)
+        self.strategy_args = strategy_args
+        self.strategy_kwargs = strategy_kwargs
+        self.data = self.data_class(self.events, self.symbol_list, start_date=self.start_date, end_date=self.end_date)
+        # If start_date is None, update start_data to the one in data
+        if self.start_date is None:
+            self.start_date = self.data.start_date
         self.broker = None
         self.portfolio = None
         self.strategy = None
@@ -51,9 +67,12 @@ class Backtester:
         self.dates = None
         self.fill_events = None
         self.signal_events = None
+        self.last_processed_timestamp = None
 
-    def __init_objects(self, init_broker=True, init_portfolio=True, init_strategy=True, strategy_args=None,
+    def __init_objects(self, init_broker=True, init_portfolio=True, init_strategy=True,
+                       strategy_args=None,
                        strategy_kwargs=None):
+        self.last_processed_timestamp = None
         if init_broker and self.broker_class:
             self.broker = self.broker_class(self.data, self.events, self.cash)
         if init_portfolio and self.portfolio_class:
@@ -62,14 +81,21 @@ class Backtester:
                                                   instrument=self.instrument_type,
                                                   initial_capital=self.cash)
         if init_strategy and self.strategy_class:
-            self.strategy = self.strategy_class(self.data, self.events, *(strategy_args or list()),
-                                                **(strategy_kwargs or dict()))
+            self.strategy = self.strategy_class(self.data, self.events,
+                                                *(strategy_args or self.strategy_args or list()),
+                                                **(strategy_kwargs or self.strategy_kwargs or dict()))
         self.signal_events = list()
         self.fill_events = list()
         self.dates = list()
 
     @singledispatch(MarketEvent)
     def process_event(self, event: MarketEvent):
+        try:
+            if (self.last_processed_timestamp or event.timestamp).year != event.timestamp.year:
+                print(f"Processing year: {event.timestamp.year}")
+            self.last_processed_timestamp = event.timestamp
+        except:
+            pass
         if self.strategy:
             self.strategy.calculate_signals(event)
         if self.broker:
@@ -103,7 +129,7 @@ class Backtester:
         print(event)
 
     def run(self, print_debug_msg: bool = False, strategy_args=None, strategy_kwargs=None,
-            bars_from: int = 0, bars_to: int = -1) -> list:
+            bars_from: int = 0, bars_to: int = -1) -> Type[NaivePortfolio]:
         """
         Runs the trading environment and returns a list of tuples with the result of the event_driven
         :param print_debug_msg: if true, debug messages are printed and the result of the strategy is plotted
@@ -111,7 +137,7 @@ class Backtester:
         :param strategy_kwargs: an optional dict of args to create new strategy for this event_driven
         :param bars_from: number of bars to skip for the test (default = 0)
         :param bars_to: number of bars for stopping the run (default = all)
-        :return: see output of self.portfolio.output_summary_stats()
+        :return: the portfolio object, so you can use portfolio.output_summary_stats() to get stats
         """
         self.events.empty()  # resets queue
         self.data.reset()  # resets bars
@@ -124,7 +150,7 @@ class Backtester:
                 if n_bars < bars_from:
                     self.events.empty()
                 n_bars += 1
-                if n_bars > bars_to:
+                if n_bars > bars_to > -1:
                     break
             else:
                 break
@@ -139,7 +165,8 @@ class Backtester:
                             logger.debug(event)
                         self.process_event(event)
         if self.portfolio:
-            return self.portfolio.output_summary_stats(plot=print_debug_msg)
+            return self.portfolio
+            # return self.portfolio.output_summary_stats(plot=print_debug_msg)
         else:
             return None
 
@@ -198,33 +225,31 @@ class SignalAnalysisBacktester(Backtester):
                  strategy_class: Type[Strategy],
                  symbol_list,
                  start_date: pd.Timestamp):
-        super().__init__(data_class=data_class, portfolio_class=None,
-                         strategy_class=strategy_class, broker_class=None,
-                         symbol_list=symbol_list, cash=1e7, instrument_type=None,
-                         start_date=start_date)
+        super().__init__(cash=1e7, symbol_list=symbol_list, strategy_class=strategy_class, start_date=start_date,
+                         data_class=data_class, portfolio_class=None, broker_class=None, instrument_type=None)
 
 
 if __name__ == '__main__':
     from ong_trading.event_driven.data import YahooHistoricalData
-    from ong_trading.strategy.strategy import MACrossOverStrategy
+    from ong_trading.strategy.strategy import MachineLearningStrategy, MACrossOverStrategy
     from ong_trading.event_driven.portfolio import NaivePortfolio
     from ong_trading.event_driven.execution import SimulatedBroker
     from ong_trading.event_driven.event import MarketEvent, SignalEvent, OrderEvent, FillEvent, UserNotifyEvent
+    from ong_trading.features.preprocess import RLPreprocessorClose
+    from ong_trading.ML.RL.config import ModelConfig
 
-    bt = Backtester(
-        data_class=YahooHistoricalData,
-        portfolio_class=NaivePortfolio,
-        strategy_class=MACrossOverStrategy,
-        broker_class=SimulatedBroker,
-        cash=7000,
-        symbol_list=["ELE.MC"],
-        instrument_type=InstrumentType.CfD,
-        # start_date="2022-01-01",
-        start_date=pd.Timestamp("2000-01-01"),
-    )
+    bt = Backtester(cash=7000, symbol_list=ModelConfig.ticker, strategy_class=MachineLearningStrategy,
+                    start_date=pd.Timestamp(ModelConfig.train_split_data), data_class=YahooHistoricalData,
+                    portfolio_class=NaivePortfolio, broker_class=SimulatedBroker, instrument_type=InstrumentType.CfD,
+                    strategy_kwargs=dict(model_path=ModelConfig.model_path(True),
+                                         preprocessor=RLPreprocessorClose.load(
+                                             ModelConfig.model_path("preprocessor"))
+                                         ))
 
-    # result = bt.run(print_debug_msg=True, strategy_kwargs=dict(short=9, long=40))
-    # print(result)
+    # logger.setLevel(logging.INFO)
+    result = bt.run(print_debug_msg=False)
+    print(result.output_summary_stats(plot=True))
+    exit(0)
 
     strategy_params = list(product(range(3, 10, 2), range(20, 100, 20)))
 

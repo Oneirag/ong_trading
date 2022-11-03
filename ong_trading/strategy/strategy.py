@@ -3,7 +3,10 @@ Based on https://www.quantstart.com/articles/Event-Driven-Backtesting-with-Pytho
 """
 # strategy.py
 
+import tensorflow as tf     # For machine learning strategies
 import numpy as np
+from typing import Type
+from ong_trading.features.preprocess import MLPreprocessor
 
 from abc import ABC, abstractmethod
 
@@ -127,6 +130,27 @@ class MACrossOverStrategy(Strategy):
                 if signal.signal_type.value != self.last_signal:
                     self.last_signal = signal.signal_type.value
                     self.events.put(signal)
+
+
+class MachineLearningStrategy(Strategy):
+    """A strategy for a machine learning model"""
+
+    def __init__(self, bars, events, model_path, preprocessor: Type[MLPreprocessor]):
+        super().__init__(bars, events)
+        self.preprocessor = preprocessor
+        self.model = tf.keras.models.load_model(model_path)
+        self.model.summary()
+
+    def calculate_signals(self, event):
+        for symbol in self.symbol_list:     # All symbols are evaluated with the same model
+            model_input = self.preprocessor.preprocess_bars(self.bars, symbol=symbol)
+            if model_input is not None:
+                model_output = self.model(model_input, training=False)
+                best_action = np.argmax(model_output) - 1      # short, neutral, long. Maps to DirectionType
+            else:
+                best_action = 0     # neutral
+            signal = SignalEvent(symbol, self.bars.get_latest_bars(symbol)[-1].timestamp, DirectionType(best_action))
+            self.events.put(signal)
 
 
 class PersistenceStrategy(Strategy):

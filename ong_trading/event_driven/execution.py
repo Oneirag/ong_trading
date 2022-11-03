@@ -102,7 +102,7 @@ class SimulatedBroker(ExecutionHandler):
         self.bars = bars
         self.events = events
         self.exchange_name = "oscar"
-        self.positions = {s: 0 for s in bars.symbol_list}
+        self._positions = {s: 0 for s in bars.symbol_list}
         self.cash = cash
         self.initial_cash = cash
 
@@ -111,10 +111,14 @@ class SimulatedBroker(ExecutionHandler):
         self.trade_history = {s: list() for s in bars.symbol_list}
         self.has_positions = False
 
+    @property
+    def positions(self):
+        return self._positions
+
     def value_pnl_trades(self, symbol, price) -> float:
         """Returns pnl of trades of a symbol at a certain price"""
         # TODO: valuate open position at bid or offer depending on LONG or SHORT
-        pnl = sum(trade.quantity * trade.position * (price - trade.price)
+        pnl = sum(trade.quantity * (price - trade.price)
                   for trade in self.trade_history[symbol])
         return pnl
 
@@ -177,7 +181,7 @@ class SimulatedBroker(ExecutionHandler):
                 continue
             commission = trade_price * 0.01  # TODO: improve commission calculation
             position = self.positions.get(order.symbol, 0)
-            new_position = position + order.direction.value * order.quantity
+            new_position = position + order.quantity # order.direction.value * order.quantity
             cost = None
             if order.instrument == InstrumentType.Stock:
                 if new_position < 0:
@@ -193,7 +197,6 @@ class SimulatedBroker(ExecutionHandler):
                                            symbol=order.symbol,
                                            exchange=self.exchange_name,
                                            quantity=order.quantity,
-                                           direction=order.direction,
                                            fill_cost=cost,
                                            price=trade_price,
                                            commission=commission)

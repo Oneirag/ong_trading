@@ -79,17 +79,32 @@ def plot_chart(fig, x, y, name: str, symbol: str, row: int, col: int, signals: p
                                  name=name,
                                  ), row=row, col=col)
 
-
-    print("elapsed {:.2f}seconds".format(time()-now))
+    print("Elapsed {:.2f}seconds".format(time() - now))
 
     offset = 0.05
     if signals is not None:
         signals = signals * y.max() * offset
         buy_signals = y - signals.where(signals > 0)
         sell_signals = y - signals.where(signals < 0)
+        neutral_signals = y - signals.where(signals == 0)
         fig.add_trace(go.Scatter(x=x, y=buy_signals, name=f"{symbol}_buy",
                                  mode="markers", marker=dict(symbol="arrow-up", size=10, color="green")),
                       row=3, col=1)
         fig.add_trace(go.Scatter(x=x, y=sell_signals, name=f"{symbol}_sell",
                                  mode="markers", marker=dict(symbol="arrow-down", size=10, color="red")),
                       row=3, col=1)
+
+        fig.add_trace(go.Scatter(x=x, y=neutral_signals, name=f"{symbol}_neutral",
+                                 mode="markers", marker=dict(symbol="diamond", size=10, color="gray")),
+                      row=3, col=1)
+
+
+def plot_maxdd(fig, date_start, date_end, row, col):
+
+    # Add shape regions
+    fig.add_vrect(
+        x0=date_start, x1=date_end,
+        fillcolor="LightSalmon", opacity=0.3,
+        layer="below", line_width=0,
+        row=row, col=col, name="drawdown"
+    )

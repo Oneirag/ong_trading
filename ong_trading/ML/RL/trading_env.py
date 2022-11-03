@@ -22,19 +22,20 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+from __future__ import annotations
 
 import logging
-import tempfile
+# import tempfile
 
 import gym
 import numpy as np
 import pandas as pd
 from gym import spaces
 from gym.utils import seeding
-from sklearn.preprocessing import scale
-import talib
 
 from ong_trading.event_driven.data import YahooHistoricalData
+from ong_trading.features.preprocess import RLPreprocessorClose
+from ong_trading.ML import get_model_path
 
 logging.basicConfig()
 log = logging.getLogger(__name__)
@@ -59,12 +60,45 @@ class DataSource:
 
     """
 
-    def __init__(self, trading_days=252, ticker='AAPL', normalize=True):
+    def __init__(self, model_name: str, trading_days=252, ticker='AAPL', normalize=True,
+                 train_test_split_date: pd.Timestamp = None):
+        """
+        Inits data
+        :param model_name: name of the model (needed for storing preprocessors)
+        :param trading_days: number of trading days (for minimum dates in step)
+        :param ticker: name of the ticker to read
+        :param normalize: true to normalize data in preprocessor
+        :param train_test_split_date: date to split train and test data. Test data starts at this date, while train is
+        previous to it
+        """
+        self.model_name = model_name
         self.ticker = ticker
         self.trading_days = trading_days
         self.normalize = normalize
-        self.data = self.load_data()
-        self.preprocess_data()
+        self.data_source = YahooHistoricalData(None, [self.ticker])
+        self.preprocessor = RLPreprocessorClose(None, normalize=self.normalize)
+
+        all_data = self.load_data()
+
+        # Split between train and test (out of sample) data using train_split_data
+        # Gives the index of the PREVIOUS data (if date not found)
+        index = all_data.index
+        # train_data_slice = slice(None, train_test_split_date)
+        # test_data_slice = slice(train_data_slice, None)
+        self.train_orig_data = all_data[:train_test_split_date]
+        log.info(f"Using {len(self.train_orig_data.index)} training data up to {self.train_orig_data.index[-1]}")
+        assert self.train_orig_data.index[-1] < pd.Timestamp(train_test_split_date), \
+            "Training data includes the first validation data"
+        self.test_orig_data = all_data[train_test_split_date:]
+        log.info(f"Using {len(self.test_orig_data.index)} "
+                 f"({len(self.test_orig_data.index)/len(all_data.index):.2%} of all data) "
+                 f"test data up to {self.test_orig_data.index[-1]}")
+        assert self.test_orig_data.index[0] >= pd.Timestamp(train_test_split_date), \
+            "Test data includes the last train data"
+        self.data = self.preprocessor.preprocess_df(self.train_orig_data)
+        self.preprocessor.save(get_model_path(self.model_name, "preprocessor"))
+        # Test data
+        self.test_data = self.preprocessor.preprocess_df(all_data)[train_test_split_date:]
         self.min_values = self.data.min().to_numpy()
         self.max_values = self.data.max().to_numpy()
         self.step = 0
@@ -72,10 +106,7 @@ class DataSource:
 
     def load_data(self):
         log.info('loading data for {}...'.format(self.ticker))
-
-        dt = YahooHistoricalData(None, [self.ticker])
-        df = dt.to_pandas(self.ticker)
-
+        df = self.data_source.to_pandas(self.ticker)
         # idx = pd.IndexSlice
         # with pd.HDFStore('../data/assets.h5') as store:
         #     df = (store['quandl/wiki/prices']
@@ -84,41 +115,18 @@ class DataSource:
         #           .dropna()
         #           .sort_index())
         # df = df.loc[:, ['adj_close', 'adj_volume', 'adj_low', 'adj_high']]
-        df = df.loc[:, ['close', 'volume', 'low', 'high']]
-        df.columns = ['close', 'volume', 'low', 'high']
+        df = df.loc[:, ['adj_close', 'close', 'volume', 'low', 'high']]
+        # df.columns = ['close', 'volume', 'low', 'high']
 
         log.info('got data for {}...'.format(self.ticker))
         return df
 
-    def preprocess_data(self):
+    def preprocess_data(self, save=False):
         """calculate returns and percentiles, then removes missing values"""
-
-        self.data['returns'] = self.data.close.pct_change()
-        self.data['ret_2'] = self.data.close.pct_change(2)
-        self.data['ret_5'] = self.data.close.pct_change(5)
-        self.data['ret_10'] = self.data.close.pct_change(10)
-        self.data['ret_21'] = self.data.close.pct_change(21)
-        self.data['rsi'] = talib.STOCHRSI(self.data.close)[1]
-        self.data['macd'] = talib.MACD(self.data.close)[1]
-        self.data['atr'] = talib.ATR(self.data.high, self.data.low, self.data.close)
-
-        slowk, slowd = talib.STOCH(self.data.high, self.data.low, self.data.close)
-        self.data['stoch'] = slowd - slowk
-        self.data['atr'] = talib.ATR(self.data.high, self.data.low, self.data.close)
-        self.data['ultosc'] = talib.ULTOSC(self.data.high, self.data.low, self.data.close)
-        self.data = (self.data.replace((np.inf, -np.inf), np.nan)
-                     .drop(['high', 'low', 'close', 'volume'], axis=1)
-                     .dropna())
-
-        r = self.data.returns.copy()
-        if self.normalize:
-            self.data = pd.DataFrame(scale(self.data),
-                                     columns=self.data.columns,
-                                     index=self.data.index)
-        features = self.data.columns.drop('returns')
-        self.data['returns'] = r  # don't scale returns
-        self.data = self.data.loc[:, ['returns'] + list(features)]
-        log.info(self.data.info())
+        return
+        self.data = self.preprocessor.preprocess_df(self.data)
+        if save:
+            self.preprocessor.save(get_model_path(self.model_name, "preprocessor"))
 
     def reset(self):
         """Provides starting index for time series and resets step"""
@@ -132,6 +140,11 @@ class DataSource:
         self.step += 1
         done = self.step > self.trading_days
         return obs, done
+
+    def take_all_steps(self):
+        """Returns data for all steps at once"""
+        obs = self.data.iloc[self.offset:(self.offset + self.trading_days)].values
+        return obs
 
 
 class TradingSimulator:
@@ -236,13 +249,17 @@ class TradingEnvironment(gym.Env):
                  trading_days=252,
                  trading_cost_bps=1e-3,
                  time_cost_bps=1e-4,
-                 ticker='AAPL'):
+                 ticker='AAPL',
+                 model_name: str = "",
+                 train_split_data: pd.Timestamp | int = None):
+        self.model_name = model_name
         self.trading_days = trading_days
         self.trading_cost_bps = trading_cost_bps
         self.ticker = ticker
         self.time_cost_bps = time_cost_bps
         self.data_source = DataSource(trading_days=self.trading_days,
-                                      ticker=ticker)
+                                      ticker=ticker, model_name=self.model_name,
+                                      train_test_split_date=train_split_data)
         self.simulator = TradingSimulator(steps=self.trading_days,
                                           trading_cost_bps=self.trading_cost_bps,
                                           time_cost_bps=self.time_cost_bps)
@@ -266,11 +283,12 @@ class TradingEnvironment(gym.Env):
         truncated = False
         return observation, reward, terminated, truncated, info
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         """Resets DataSource and TradingSimulator; returns first observation"""
         self.data_source.reset()
         self.simulator.reset()
-        return self.data_source.take_step()[0]
+        return self.data_source.take_step()[0], dict()
+        # return self.data_source.take_step()[0]
 
     # TODO
     def render(self, mode='human'):

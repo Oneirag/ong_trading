@@ -6,4 +6,5 @@ intel-tensorflow; sys_platform != "darwin"
 gym[all]        # open-ai gym
 sklearn
 seaborn     # nice plots
-ta-lib      # If it does not work on M1, then use 'arch -arm64 brew install ta-lib'
+ta-lib; sys_platform == "darwin"      # If it does not work on M1, then use 'arch -arm64 brew install ta-lib'
+talib-binary; sys_platform != "darwin"
