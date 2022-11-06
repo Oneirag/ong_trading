@@ -54,22 +54,23 @@ class MLPreprocessor:
         pass
 
     @classmethod
-    def __get_filename(cls, path: str) -> str:
+    def __get_filename(cls, path: str, not_exists_ok=False) -> str:
         filename = os.path.join(path, cls.__name__ + ".pkl")
-        if os.path.isfile(filename):
+        if os.path.isfile(filename) or not_exists_ok:
             return filename
         else:
             # Look for any pkl in the directory (potentially insafe). Returns the first one found
-            for f in (f for f in os.listdir(path) if f.endswith(".pkl")):
-                classname = f.split(".")[0]
-                subclasses = cls.__subclasses__()
-                if any((classname == subclassname.__name__) for subclassname in subclasses):
-                    return os.path.join(path, f)
+            if os.path.isdir(path):
+                for f in (f for f in os.listdir(path) if f.endswith(".pkl")):
+                    classname = f.split(".")[0]
+                    subclasses = cls.__subclasses__()
+                    if any((classname == subclassname.__name__) for subclassname in subclasses):
+                        return os.path.join(path, f)
         raise ValueError("Not valid preprocessor file found")
 
     def save(self, path: str):
         """Save preprocessor in the given path"""
-        filename = self.__get_filename(path)
+        filename = self.__get_filename(path, not_exists_ok=True)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         with open(filename, "wb") as f:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)

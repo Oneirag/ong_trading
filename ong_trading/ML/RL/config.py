@@ -65,3 +65,4 @@ class ModelConfigPCA(ModelConfigBase):
 
 ModelConfig = ModelConfigIndicators
 ModelConfig = ModelConfigPCA
+ModelHyperParams = ModelHyperParamsBase
