@@ -80,7 +80,11 @@ class DDQNAgent:
                  l2_reg,
                  tau,
                  batch_size,
-                 model_name="model1"):
+                 model_name="model1",
+                 random_seed=None):
+
+        if random_seed:
+            np.random.seed(random_seed)
 
         self.timer = OngTimer(logger=logger)
 
@@ -97,7 +101,7 @@ class DDQNAgent:
 
         self.online_network = self.build_model()
         self.target_network = self.build_model(trainable=False)
-        self.update_target(store_weights=False)
+        self.update_target()
 
         self.epsilon = epsilon_start
         self.epsilon_decay_steps = epsilon_decay_steps
@@ -151,15 +155,10 @@ class DDQNAgent:
                           optimizer=Adam(learning_rate=self.learning_rate))
         return model
 
-    def update_target(self, store_weights=True):
-        """Updates target network but also stores weights if store_weights=True"""
+    def update_target(self):
+        """Updates target network"""
         weights = self.online_network.get_weights()
         self.target_network.set_weights(weights)
-        if store_weights:
-            pass
-            # TODO: save_model is really slow (up to 15s each, so avoid saving them here
-            #  (a call to self.save_model must be done explicitly)
-            # self.save_model()
 
     def epsilon_greedy_policy(self, state):
         self.total_steps += 1

@@ -39,10 +39,6 @@ if gpu_devices:
 else:
     print('Using CPU')
 
-results_path = Path('results', 'trading_bot')
-if not results_path.exists():
-    results_path.mkdir(parents=True)
-
 
 # Helper function
 def format_time(t):
@@ -51,54 +47,39 @@ def format_time(t):
     return '{:02.0f}:{:02.0f}:{:02.0f}'.format(h, m, s)
 
 
-# Set up environment
-register(
-    id='trading-v0',
-    entry_point='ong_trading.ML.RL.trading_env:TradingEnvironment',
-    max_episode_steps=ModelConfig.trading_days,
-    kwargs=dict(ticker=ModelConfig.ticker,
-                model_name=ModelConfig.model_name,
-                trading_cost_bps=1e-3,
-                time_cost_bps=1e-4,
-                train_split_data=ModelConfig.train_split_data)
-)
+def create_tradingenv_ddqn() -> tuple:
+    # Set up environment
+    register(
+        id='trading-v0',
+        entry_point='ong_trading.ML.RL.trading_env:TradingEnvironment',
+        max_episode_steps=ModelConfig.trading_days,
+        kwargs=dict(ticker=ModelConfig.ticker,
+                    model_name=ModelConfig.model_name,
+                    trading_cost_bps=1e-3,
+                    time_cost_bps=1e-4,
+                    train_split_date=ModelConfig.train_split_date,
+                    train_start_date=ModelConfig.train_start_date,
+                    preprocessor=ModelConfig.preprocessor)
+    )
 
-# Initialize trading environment
-trading_environment = gym.make('trading-v0')
-trading_environment.seed(ModelConfig.random_seed)
+    # Initialize trading environment
+    trading_environment = gym.make('trading-v0')
+    trading_environment.seed(ModelConfig.random_seed)
 
-# Get environ params
-state_dim = trading_environment.observation_space.shape[0]
-num_actions = trading_environment.action_space.n
-max_episode_steps = trading_environment.spec.max_episode_steps
+    # Get environ params
+    state_dim = trading_environment.observation_space.shape[0]
+    num_actions = trading_environment.action_space.n
 
-# Create DDQN Agent
-# We will use TensorFlow to create our Double Deep Q-Network .
-tf.keras.backend.clear_session()
+    # Create DDQN Agent
+    # We will use TensorFlow to create our Double Deep Q-Network .
+    tf.keras.backend.clear_session()
 
-# Initialize variables
-total_steps = 0
-navs, market_navs, diffs = [], [], []
+    ddqn = DDQNAgent(state_dim=state_dim, num_actions=num_actions, model_name=ModelConfig.model_name,
+                     random_seed=ModelConfig.random_seed,
+                     **asdict(ModelHyperParams()))
 
-# ddqn = DDQNAgent(state_dim=state_dim,
-#                  num_actions=num_actions,
-#                  learning_rate=ModelHyperParams.learning_rate,
-#                  gamma=ModelHyperParams.gamma,
-#                  epsilon_start=ModelHyperParams.epsilon_start,
-#                  epsilon_end=ModelHyperParams.epsilon_end,
-#                  epsilon_decay_steps=ModelHyperParams.epsilon_decay_steps,
-#                  epsilon_exponential_decay=ModelHyperParams.epsilon_exponential_decay,
-#                  replay_capacity=ModelHyperParams.replay_capacity,
-#                  architecture=ModelHyperParams.architecture,
-#                  l2_reg=ModelHyperParams.l2_reg,
-#                  tau=ModelHyperParams.tau,
-#                  batch_size=ModelHyperParams.batch_size,
-#                  model_name=ModelConfig.model_name)
-ddqn = DDQNAgent(state_dim=state_dim, num_actions=num_actions, model_name=ModelConfig.model_name,
-                 **asdict(ModelHyperParams()))
-
-
-ddqn.online_network.summary()
+    ddqn.online_network.summary()
+    return trading_environment, ddqn
 
 
 # Visualization
@@ -115,16 +96,23 @@ def track_results(episode, nav_ma_100, nav_ma_10,
                           win_ratio, epsilon))
 
 
-# Train Agent
-if __name__ == '__main__':
+def train(max_episodes: int = ModelConfig.max_episodes) -> dict:
+
+    trading_environment, ddqn = create_tradingenv_ddqn()
+    max_episode_steps = trading_environment.spec.max_episode_steps
+
+    # Initialize variables
+    navs, market_navs, diffs = [], [], []
     start = time()
     results = []
-    for episode in range(1, ModelConfig.max_episodes + 1):
-        this_state, info = trading_environment.reset()
+    for episode in range(1, max_episodes + 1):
+        # (this_return, this_state), info = trading_environment.reset()
+        trading_environment.reset()
 
         # Calculate all at once for faster execution (steps are independent of actions as agent cannot alter market)
-        all_states = trading_environment.data_source.take_all_steps()
+        all_returns, all_states = trading_environment.data_source.take_all_steps()
         all_actions = iter(ddqn.epsilon_greedy_policy_all(all_states))
+        this_state = all_states[0]
 
         for episode_step in range(max_episode_steps):
             # action = ddqn.epsilon_greedy_policy(this_state.reshape(-1, state_dim))
@@ -168,9 +156,9 @@ if __name__ == '__main__':
                           np.mean(market_navs[-100:]), np.mean(market_navs[-10:]),
                           np.sum([s > 0 for s in diffs[-100:]]) / min(len(diffs), 100),
                           time() - start, ddqn.epsilon, extra_text)
-        if len(diffs) > 25 and all([r > 0 for r in diffs[-25:]]):
-            print(result.tail())
-            break
+        # if len(diffs) > 25 and all([r > 0 for r in diffs[-25:]]):
+        #     print(result.tail())
+        #     break
 
     ddqn.print_timers()
     ddqn.save_model()
@@ -184,15 +172,23 @@ if __name__ == '__main__':
 
     results['Strategy Wins (%)'] = (results.Difference > 0).rolling(100).sum()
     results.info()
+    return results
+
+
+def plot_results(training_results: pd.DataFrame):
+    # make dirs for results
+    results_path = Path('results', 'trading_bot')
+    if not results_path.exists():
+        results_path.mkdir(parents=True)
 
     with sns.axes_style('white'):
         # sns.distplot(results.Difference)
-        sns.histplot(results.Difference)
+        sns.histplot(training_results.Difference)
         sns.despine()
 
     fig, axes = plt.subplots(ncols=2, figsize=(14, 4), sharey=True)
 
-    df1 = (results[['Agent', 'Market']]
+    df1 = (training_results[['Agent', 'Market']]
            .sub(1)
            .rolling(100)
            .mean())
@@ -200,7 +196,7 @@ if __name__ == '__main__':
              title='Annual Returns (Moving Average)',
              lw=1)
 
-    df2 = results['Strategy Wins (%)'].div(100).rolling(50).mean()
+    df2 = training_results['Strategy Wins (%)'].div(100).rolling(50).mean()
     df2.plot(ax=axes[1],
              title='Agent Outperformance (%, Moving Average)')
 
@@ -214,6 +210,13 @@ if __name__ == '__main__':
     sns.despine()
     fig.tight_layout()
     fig.savefig(results_path / 'performance', dpi=300)
+
+
+if __name__ == '__main__':
+
+    results = train(ModelConfig.max_episodes)
+    plot_results(results)
+
 
     """
     10 | 00:00:00 | Agent: -20.3% (-20.3%) | Market:   6.1% (  6.1%) | Wins: 20.0% | eps:  0.960

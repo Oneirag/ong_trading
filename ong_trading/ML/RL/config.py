@@ -5,9 +5,12 @@ General configuration of the Reinforcement learning model:
 """
 from dataclasses import dataclass, field
 from ong_trading.ML import get_model_path as gmp
+from ong_trading.features.preprocess import PCA_Preprocessor, RLPreprocessorClose
+from functools import partial
+
 
 @dataclass
-class ModelHyperParams:
+class ModelHyperParamsBase:
     # Define hyperparameters for ddqn network
     gamma: field() = .99,  # discount factor
     tau: field() = 100  # target network update frequency
@@ -26,19 +29,39 @@ class ModelHyperParams:
 
 
 @dataclass
-class ModelConfig:
+class ModelConfigBase:
     random_seed = 42
     trading_days = 252
     ticker = "ELE.MC"
-    model_name = "ELE.MC_indicadores"
+    inner_model_name = ""
     # Number of training episodes
     max_episodes = 1000
     max_episodes = 1500
     # A date for which validation will start (so training will NOT use this date)
-    train_split_data = "2022-01-01"
+    train_split_date = "2022-01-01"
+    train_start_date = "2020-01-01"
+    train_start_date = None
 
     @classmethod
     def model_path(cls, extra):
         return gmp(cls.model_name, extra)
 
+    @classmethod
+    @property
+    def model_name(cls) -> str:
+        return cls.ticker + "_" + cls.inner_model_name
 
+
+class ModelConfigIndicators(ModelConfigBase):
+    inner_model_name = "indicadores"
+    preprocessor = partial(RLPreprocessorClose, normalize=True)
+
+
+class ModelConfigPCA(ModelConfigBase):
+    inner_model_name = "pca"
+    preprocessor = partial(PCA_Preprocessor, validation_window_len=ModelConfigBase.train_split_date,
+                           symbol_name=ModelConfigBase.ticker)
+
+
+ModelConfig = ModelConfigIndicators
+ModelConfig = ModelConfigPCA

@@ -143,7 +143,7 @@ class MachineLearningStrategy(Strategy):
 
     def calculate_signals(self, event):
         for symbol in self.symbol_list:     # All symbols are evaluated with the same model
-            model_input = self.preprocessor.preprocess_bars(self.bars, symbol=symbol)
+            model_input = self.preprocessor.transform_bars(self.bars, symbol=symbol)
             if model_input is not None:
                 model_output = self.model(model_input, training=False)
                 best_action = np.argmax(model_output) - 1      # short, neutral, long. Maps to DirectionType

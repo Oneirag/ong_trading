@@ -7,22 +7,22 @@ import pandas as pd
 
 from ong_trading.event_driven.backtester import Backtester
 from ong_trading.strategy.strategy import MachineLearningStrategy
-from ong_trading.features.preprocess import RLPreprocessorClose
+from ong_trading.features.preprocess import MLPreprocessor
 from ong_trading.ML.RL.config import ModelConfig
 
 
 if __name__ == '__main__':
     test_kwargs = dict(
         cash=7000, symbol_list=ModelConfig.ticker, strategy_class=MachineLearningStrategy,
-        start_date=pd.Timestamp(ModelConfig.train_split_data),
+        start_date=pd.Timestamp(ModelConfig.train_split_date),
         strategy_kwargs=dict(model_path=ModelConfig.model_path(True),
-                             preprocessor=RLPreprocessorClose.load(
+                             preprocessor=MLPreprocessor.load(
                                  ModelConfig.model_path("preprocessor"))
                              )
     )
     train_kwargs = test_kwargs.copy()
-    train_kwargs['end_date'] = ModelConfig.train_split_data
-    train_kwargs['start_date'] = None
+    train_kwargs['end_date'] = ModelConfig.train_split_date
+    train_kwargs['start_date'] = ModelConfig.train_start_date
 
     bt_test = bt_train = None
     bt_test = Backtester(**test_kwargs)

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 # import tempfile
+from typing import Type
 
 import gym
 import numpy as np
@@ -34,7 +35,8 @@ from gym import spaces
 from gym.utils import seeding
 
 from ong_trading.event_driven.data import YahooHistoricalData
-from ong_trading.features.preprocess import RLPreprocessorClose
+# from ong_trading.features.preprocess import RLPreprocessorClose
+from ong_trading.features.preprocess import MLPreprocessor
 from ong_trading.ML import get_model_path
 
 logging.basicConfig()
@@ -61,7 +63,8 @@ class DataSource:
     """
 
     def __init__(self, model_name: str, trading_days=252, ticker='AAPL', normalize=True,
-                 train_test_split_date: pd.Timestamp = None):
+                 train_test_split_date: pd.Timestamp = None, train_start_date: pd.Timestamp = None,
+                 preprocessor: Type[MLPreprocessor] = None):
         """
         Inits data
         :param model_name: name of the model (needed for storing preprocessors)
@@ -70,15 +73,20 @@ class DataSource:
         :param normalize: true to normalize data in preprocessor
         :param train_test_split_date: date to split train and test data. Test data starts at this date, while train is
         previous to it
+        :param train_start_date: start date for train. If None then all available data will be used
+        :param preprocessor: a preprocessor class for preprocess data
         """
         self.model_name = model_name
         self.ticker = ticker
         self.trading_days = trading_days
         self.normalize = normalize
         self.data_source = YahooHistoricalData(None, [self.ticker])
-        self.preprocessor = RLPreprocessorClose(None, normalize=self.normalize)
+        # self.preprocessor = RLPreprocessorClose(None, normalize=self.normalize)
+        self.preprocessor = preprocessor(self.data_source)
 
         all_data = self.load_data()
+        if train_start_date:
+            all_data = all_data[train_start_date:]
 
         # Split between train and test (out of sample) data using train_split_data
         # Gives the index of the PREVIOUS data (if date not found)
@@ -95,10 +103,10 @@ class DataSource:
                  f"test data up to {self.test_orig_data.index[-1]}")
         assert self.test_orig_data.index[0] >= pd.Timestamp(train_test_split_date), \
             "Test data includes the last train data"
-        self.data = self.preprocessor.preprocess_df(self.train_orig_data)
+        self.data = self.preprocessor.transform(self.train_orig_data)
         self.preprocessor.save(get_model_path(self.model_name, "preprocessor"))
         # Test data
-        self.test_data = self.preprocessor.preprocess_df(all_data)[train_test_split_date:]
+        self.test_data = self.preprocessor.transform(all_data)[train_test_split_date:]
         self.min_values = self.data.min().to_numpy()
         self.max_values = self.data.max().to_numpy()
         self.step = 0
@@ -115,7 +123,7 @@ class DataSource:
         #           .dropna()
         #           .sort_index())
         # df = df.loc[:, ['adj_close', 'adj_volume', 'adj_low', 'adj_high']]
-        df = df.loc[:, ['adj_close', 'close', 'volume', 'low', 'high']]
+        df = df.loc[:, ['adj_close', 'close', 'volume', 'low', 'high', 'open']]
         # df.columns = ['close', 'volume', 'low', 'high']
 
         log.info('got data for {}...'.format(self.ticker))
@@ -124,7 +132,7 @@ class DataSource:
     def preprocess_data(self, save=False):
         """calculate returns and percentiles, then removes missing values"""
         return
-        self.data = self.preprocessor.preprocess_df(self.data)
+        self.data = self.preprocessor.transform(self.data)
         if save:
             self.preprocessor.save(get_model_path(self.model_name, "preprocessor"))
 
@@ -137,14 +145,18 @@ class DataSource:
     def take_step(self):
         """Returns data for current trading day and done signal"""
         obs = self.data.iloc[self.offset + self.step].values
+        if self.offset + self.step == 218:
+            pass
+        ret = self.train_orig_data.adj_close.pct_change().iat[self.offset + self.step]
         self.step += 1
         done = self.step > self.trading_days
-        return obs, done
+        return (ret, obs), done
 
     def take_all_steps(self):
         """Returns data for all steps at once"""
         obs = self.data.iloc[self.offset:(self.offset + self.trading_days)].values
-        return obs
+        rets = self.train_orig_data.pct_change().iloc[self.offset:(self.offset + self.trading_days)].values
+        return rets, obs
 
 
 class TradingSimulator:
@@ -197,7 +209,8 @@ class TradingSimulator:
         trade_costs = abs(n_trades) * self.trading_cost_bps
         time_cost = 0 if n_trades else self.time_cost_bps
         self.costs[self.step] = trade_costs + time_cost
-        reward = start_position * market_return - self.costs[self.step]
+        # reward = start_position * market_return - self.costs[self.step]
+        reward = start_position * market_return - self.costs[max(0, self.step - 1)]
         self.strategy_returns[self.step] = reward
 
         if self.step != 0:
@@ -251,7 +264,10 @@ class TradingEnvironment(gym.Env):
                  time_cost_bps=1e-4,
                  ticker='AAPL',
                  model_name: str = "",
-                 train_split_data: pd.Timestamp | int = None):
+                 train_split_date: pd.Timestamp | int = None,
+                 train_start_date: pd.Timestamp | int = None,
+                 preprocessor=None,
+                 ):
         self.model_name = model_name
         self.trading_days = trading_days
         self.trading_cost_bps = trading_cost_bps
@@ -259,7 +275,9 @@ class TradingEnvironment(gym.Env):
         self.time_cost_bps = time_cost_bps
         self.data_source = DataSource(trading_days=self.trading_days,
                                       ticker=ticker, model_name=self.model_name,
-                                      train_test_split_date=train_split_data)
+                                      train_test_split_date=train_split_date,
+                                      train_start_date=train_start_date,
+                                      preprocessor=preprocessor)
         self.simulator = TradingSimulator(steps=self.trading_days,
                                           trading_cost_bps=self.trading_cost_bps,
                                           time_cost_bps=self.time_cost_bps)
@@ -275,9 +293,10 @@ class TradingEnvironment(gym.Env):
     def step(self, action):
         """Returns state observation, reward, done and info"""
         assert self.action_space.contains(action), '{} {} invalid'.format(action, type(action))
-        observation, done = self.data_source.take_step()
+        (market_return, observation), done = self.data_source.take_step()
         reward, info = self.simulator.take_step(action=action,
-                                                market_return=observation[0])
+                                                # market_return=observation[0])
+                                                market_return=market_return)
         # return observation, reward, done, info
         terminated = done
         truncated = False
@@ -287,7 +306,7 @@ class TradingEnvironment(gym.Env):
         """Resets DataSource and TradingSimulator; returns first observation"""
         self.data_source.reset()
         self.simulator.reset()
-        return self.data_source.take_step()[0], dict()
+        return self.data_source.take_step()[0][1], dict()
         # return self.data_source.take_step()[0]
 
     # TODO

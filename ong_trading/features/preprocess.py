@@ -25,14 +25,20 @@ class MLPreprocessor:
     columns_of_interest = ['adj_close', 'close', 'open', 'high', 'low', 'volume']
     window_size = 200        # Size of the window for preprocessing (number of past days to include in preprocessing)
 
-    def preprocess_bars(self, bars: DataHandler, symbol: str):
+    def transform_bars(self, bars: DataHandler, symbol: str) -> np.ndarray | None:
+        """
+        Transform a simple bar, only if bar has
+        :param bars: a DataHandler (typically, a YahooHistoricData)
+        :param symbol: symbol name for getting bars from DataHandler
+        :return: None if there are not enough bars (less than self.window_size),
+        """
         bars = bars.get_latest_bars(symbol, N=self.window_size)  # Return last window_size bars
         if len(bars) < self.window_size:
             return None
         else:
             df = pd.DataFrame(bars)
-            df = df.set_index("timestamp").loc[:, ['adj_close', 'close', 'volume', 'low', 'high']]
-            proc = self.preprocess_df(df)
+            df = df.set_index("timestamp").loc[:, ['adj_close', 'open', 'close', 'volume', 'low', 'high']]
+            proc = self.transform(df)
             if proc is None:
                 return None
             last_row = proc.iloc[-1, :]
@@ -42,14 +48,24 @@ class MLPreprocessor:
         pass
 
     @abc.abstractmethod
-    def preprocess_df(self, data: pd.DataFrame) -> pd.DataFrame:
-        """To be implemented in children classes"""
+    def transform(self, data: pd.DataFrame) -> pd.DataFrame:
+        """To be implemented in children classes. Returns transformed df. If it is run for the first
+        time, it also fits internal parametets (e.g. scalers)"""
         pass
 
     @classmethod
     def __get_filename(cls, path: str) -> str:
         filename = os.path.join(path, cls.__name__ + ".pkl")
-        return filename
+        if os.path.isfile(filename):
+            return filename
+        else:
+            # Look for any pkl in the directory (potentially insafe). Returns the first one found
+            for f in (f for f in os.listdir(path) if f.endswith(".pkl")):
+                classname = f.split(".")[0]
+                subclasses = cls.__subclasses__()
+                if any((classname == subclassname.__name__) for subclassname in subclasses):
+                    return os.path.join(path, f)
+        raise ValueError("Not valid preprocessor file found")
 
     def save(self, path: str):
         """Save preprocessor in the given path"""
@@ -64,10 +80,13 @@ class MLPreprocessor:
         filename = cls.__get_filename(path)
         with open(filename, "rb") as f:
             obj = pickle.load(f)
-        cls_classname = cls.__name__
-        obj_classname = obj.__class__.__name__
-        if obj_classname != cls_classname:
-            raise ValueError(f"Error loading preprocessor. Expected class {cls_classname} but loaded {obj_classname}")
+        if not isinstance(obj, cls):
+            cls_classname = cls.__name__
+            obj_classname = obj.__class__.__name__
+            raise ValueError(f"Error loading preprocessor. Loaded {obj_classname} "
+                             f"which is not instance of {cls_classname}")
+        # if obj_classname != cls_classname:
+        #     raise ValueError(f"Error loading preprocessor. Expected class {cls_classname} but loaded {obj_classname}")
         return obj
 
     def test(self, data: HistoricCSVDataHandler) -> dict:
@@ -79,7 +98,7 @@ class MLPreprocessor:
         retval = dict()
         for symbol in data.symbol_list:
             in_df = data.to_pandas(symbol)
-            processed = self.preprocess_df(in_df)
+            processed = self.transform(in_df)
             in_df = in_df.loc[:, ["open", "high", "low", "close"]]
             retval[symbol] = processed
             from plotly.subplots import make_subplots
@@ -109,9 +128,9 @@ class RLPreprocessorClose(MLPreprocessor):
         if data is not None:
             # Validate all data to fit scaler
             df = data.to_pandas(data.symbol_list[0]).iloc[:-validation_window_len]
-            self.preprocess_df(df)
+            self.transform(df)
 
-    def preprocess_df(self, data: pd.DataFrame) -> pd.DataFrame | None:
+    def transform(self, data: pd.DataFrame) -> pd.DataFrame | None:
         if data.shape[1] > len(self.columns_of_interest):
              data = data.loc[:, self.columns_of_interest]
         close = data.loc[:, self.close_column]
@@ -172,28 +191,17 @@ class PCA_Preprocessor(MLPreprocessor):
         self.n_pca_components = n_pca_components
         self.window_size = window_size
         self.validation_window_len = validation_window_len
-        self.symbol = symbol_name or data.symbol_list[0]
-        df = data.to_pandas(self.symbol)
-        # Do not use last year to scale
-        df = df.iloc[:-validation_window_len]
-        x = self.__prepare_df_for_pca(df)
-        # self.pre_scaler = StandardScaler()
-        self.pre_scaler = MinMaxScaler()
-        self.pre_scaler.fit(x)
-        X = self.pre_scaler.transform(x)
-        self.pca = PCA(n_components=self.n_pca_components)
-        self.pca.fit(X)
-        pca_out = self.pca.transform(X)
-        # self.post_scaler = StandardScaler()
-        self.post_scaler = MinMaxScaler()
-        self.post_scaler.fit(pca_out)
+        self.symbol = symbol_name   # or data.symbol_list[0]
+        self.pca = None
+        self.pre_scaler = None
+        self.post_scaler = None
 
     def __prepare_df_for_pca(self, df_pca: pd.DataFrame) -> np.array:
         """Transforms input dataframe into a matrix that can be used for pca analysis """
         in_df = df_pca.loc[:, self.column_names]
         n_cols = in_df.shape[1]
         in_pca = in_df.values.flatten()
-        n_repeats = df_pca.shape[0] - self.window_size
+        n_repeats = df_pca.shape[0] - self.window_size + 1
         mask = np.tile(np.arange(self.window_size * n_cols)[None, :], (n_repeats, 1)) + \
                n_cols * np.arange(n_repeats)[:, None]
         x = in_pca[mask]
@@ -232,13 +240,28 @@ class PCA_Preprocessor(MLPreprocessor):
             plt.show()
         return processed_dict
 
-    def preprocess_df(self, data: pd.DataFrame) -> pd.DataFrame:
+    def transform(self, data: pd.DataFrame) -> pd.DataFrame:
+        # If it is the first call, adjust scalers and PCA
+        if self.post_scaler is None:
+            df = data
+            x = self.__prepare_df_for_pca(df)
+            # self.pre_scaler = StandardScaler()
+            self.pre_scaler = MinMaxScaler()
+            self.pre_scaler.fit(x)
+            X = self.pre_scaler.transform(x)
+            self.pca = PCA(n_components=self.n_pca_components)
+            self.pca.fit(X)
+            pca_out = self.pca.transform(X)
+            # self.post_scaler = StandardScaler()
+            self.post_scaler = MinMaxScaler()
+            self.post_scaler.fit(pca_out)
+
         df_in = data.loc[:, self.column_names]
         x = self.__prepare_df_for_pca(df_in)
         X = self.pre_scaler.transform(x)
         pca = self.pca.transform(X)
         out_pca = self.post_scaler.transform(pca)
-        return pd.DataFrame(out_pca, index=data.index[self.window_size:])
+        return pd.DataFrame(out_pca, index=data.index[self.window_size - 1:])
 
 
 if __name__ == '__main__':

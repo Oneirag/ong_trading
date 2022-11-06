@@ -239,7 +239,7 @@ if __name__ == '__main__':
     from ong_trading.ML.RL.config import ModelConfig
 
     bt = Backtester(cash=7000, symbol_list=ModelConfig.ticker, strategy_class=MachineLearningStrategy,
-                    start_date=pd.Timestamp(ModelConfig.train_split_data), data_class=YahooHistoricalData,
+                    start_date=pd.Timestamp(ModelConfig.train_split_date), data_class=YahooHistoricalData,
                     portfolio_class=NaivePortfolio, broker_class=SimulatedBroker, instrument_type=InstrumentType.CfD,
                     strategy_kwargs=dict(model_path=ModelConfig.model_path(True),
                                          preprocessor=RLPreprocessorClose.load(
