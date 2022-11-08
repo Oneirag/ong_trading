@@ -110,7 +110,7 @@ def train(max_episodes: int = ModelConfig.max_episodes) -> dict:
         trading_environment.reset()
 
         # Calculate all at once for faster execution (steps are independent of actions as agent cannot alter market)
-        all_returns, all_states = trading_environment.data_source.take_all_steps()
+        _, all_states = trading_environment.data_source.take_all_steps()
         all_actions = iter(ddqn.epsilon_greedy_policy_all(all_states))
         this_state = all_states[0]
 

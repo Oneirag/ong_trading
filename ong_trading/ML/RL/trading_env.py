@@ -103,12 +103,15 @@ class DataSource:
                  f"test data up to {self.test_orig_data.index[-1]}")
         assert self.test_orig_data.index[0] >= pd.Timestamp(train_test_split_date), \
             "Test data includes the last train data"
-        self.data = self.preprocessor.transform(self.train_orig_data)
+        # Train data
+        self.train_data = self.preprocessor.transform(self.train_orig_data)
+        self.train_returns = self.train_orig_data.adj_close.pct_change()
         self.preprocessor.save(get_model_path(self.model_name, "preprocessor"))
         # Test data
         self.test_data = self.preprocessor.transform(all_data)[train_test_split_date:]
-        self.min_values = self.data.min().to_numpy()
-        self.max_values = self.data.max().to_numpy()
+        self.test_returns = all_data.adj_close[train_test_split_date:].pct_change()
+        self.min_values = self.train_data.min().to_numpy()
+        self.max_values = self.train_data.max().to_numpy()
         self.step = 0
         self.offset = None
 
@@ -129,33 +132,26 @@ class DataSource:
         log.info('got data for {}...'.format(self.ticker))
         return df
 
-    def preprocess_data(self, save=False):
-        """calculate returns and percentiles, then removes missing values"""
-        return
-        self.data = self.preprocessor.transform(self.data)
-        if save:
-            self.preprocessor.save(get_model_path(self.model_name, "preprocessor"))
-
     def reset(self):
         """Provides starting index for time series and resets step"""
-        high = len(self.data.index) - self.trading_days
+        high = len(self.train_data.index) - self.trading_days
         self.offset = np.random.randint(low=0, high=high)
         self.step = 0
 
     def take_step(self):
         """Returns data for current trading day and done signal"""
-        obs = self.data.iloc[self.offset + self.step].values
+        obs = self.train_data.iloc[self.offset + self.step].values
         if self.offset + self.step == 218:
             pass
-        ret = self.train_orig_data.adj_close.pct_change().iat[self.offset + self.step]
+        ret = self.train_returns.iat[self.offset + self.step]
         self.step += 1
         done = self.step > self.trading_days
         return (ret, obs), done
 
     def take_all_steps(self):
         """Returns data for all steps at once"""
-        obs = self.data.iloc[self.offset:(self.offset + self.trading_days)].values
-        rets = self.train_orig_data.pct_change().iloc[self.offset:(self.offset + self.trading_days)].values
+        obs = self.train_data.iloc[self.offset:(self.offset + self.trading_days)].values
+        rets = self.train_returns.iloc[self.offset:(self.offset + self.trading_days)].values
         return rets, obs
 
 

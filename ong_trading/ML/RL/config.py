@@ -28,6 +28,10 @@ class ModelHyperParamsBase:
     epsilon_exponential_decay: field() = .99
 
 
+class ModelHyperParamsLowerGamma(ModelHyperParamsBase):
+    gamma = 0.95
+
+
 @dataclass
 class ModelConfigBase:
     random_seed = 42
@@ -66,3 +70,4 @@ class ModelConfigPCA(ModelConfigBase):
 ModelConfig = ModelConfigIndicators
 ModelConfig = ModelConfigPCA
 ModelHyperParams = ModelHyperParamsBase
+ModelHyperParams = ModelHyperParamsLowerGamma

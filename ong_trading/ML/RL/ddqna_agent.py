@@ -1,8 +1,4 @@
 import os
-# import pickle
-# from collections import deque
-# from random import sample
-import keras
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Sequential
@@ -28,7 +24,7 @@ class Experience:
 
     def __init_np_like(self, x, dtype=np.float64):
         """Returns an array of the same columns as x and self.max_len rows"""
-        if isinstance(x, (int, float, np.int64)):
+        if isinstance(x, (int, float, np.int64, np.int32)):
             return np.empty(self.max_len, dtype=dtype)
         else:
             return np.empty((self.max_len, len(x)), dtype=dtype)
