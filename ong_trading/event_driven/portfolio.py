@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from math import floor
 
 from ong_trading.event_driven.event import FillEvent, OrderEvent, SignalEvent, MarketEvent
-from ong_trading.event_driven.performance import create_sharpe_ratio, create_drawdowns, AnalyzeOutput
+from ong_trading.event_driven.performance import create_sharpe_ratio, create_drawdowns, OutputAnalyzer
 from ong_trading.event_driven.utils import InstrumentType, DirectionType, plot_chart
 
 
@@ -620,13 +620,12 @@ class NaivePortfolio(Portfolio):
         bars = self.bars.get_latest_bars(self.bars.symbol_list[0], N=None)
         df_bars = pd.DataFrame(bars).set_index("timestamp")
         df_pos = pd.DataFrame(self.all_positions).set_index("datetime")
-        analisys = AnalyzeOutput(pnl=self.equity_curve['total'])
-        stats = analisys.get_stats()
+        analysis = OutputAnalyzer(equity_curve=self.equity_curve['total'])
+        stats = analysis.get_stats()
         print(stats)
         if plot:
-            analisys.plot(positions=df_pos, prices=df_bars, symbol=self.symbol_list[0], model_name=model_name)
+            analysis.plot(positions=df_pos, prices=df_bars, symbol=self.symbol_list[0], model_name=model_name)
         # return stats
-
 
         total_return = self.equity_curve['equity_curve'][-1]
         gross_total_return = self.equity_curve['gross_equity_curve'][-1]

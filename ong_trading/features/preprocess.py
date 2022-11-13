@@ -18,28 +18,55 @@ import plotly.graph_objects as go
 import pickle
 
 
+class ProcessorNotFitException(Exception):
+    """Exception raised if a ML preprocessor is called without having initialized internal parameters with fit method"""
+    pass
+
+
+def compare_scalers(scaler1: StandardScaler | MinMaxScaler, scaler2: StandardScaler | MinMaxScaler) -> bool:
+    if scaler1.__class__.__name__ == scaler2.__class__.__name__:
+        if isinstance(scaler1, StandardScaler):
+            return (
+                    np.allclose(scaler1.scale_, scaler2.scale_)
+                    and np.allclose(scaler1.mean_, scaler2.mean_)
+                    and np.allclose(scaler1.var_, scaler2.var_)
+            )
+        elif isinstance(scaler1, MinMaxScaler):
+            return (
+                    np.allclose(scaler1.scale_, scaler2.scale_)
+                    and np.allclose(scaler1.data_max_, scaler2.data_max_)
+                    and np.allclose(scaler1.data_min_, scaler2.data_min_)
+            )
+    return False
+
+
 class MLPreprocessor:
     """Base class for preprocessing data"""
 
     # These are the columns that all input dataframe should have
     columns_of_interest = ['adj_close', 'close', 'open', 'high', 'low', 'volume']
-    window_size = 200        # Size of the window for preprocessing (number of past days to include in preprocessing)
+    # Size of the window for preprocessing (number of past days to include in preprocessing).
+    # None means all available data
+    window_size = None
 
     def transform_bars(self, bars: DataHandler, symbol: str) -> np.ndarray | None:
         """
         Transform a simple bar, only if bar has
         :param bars: a DataHandler (typically, a YahooHistoricData)
         :param symbol: symbol name for getting bars from DataHandler
-        :return: None if there are not enough bars (less than self.window_size),
+        :return: None if there are not enough bars (less than self.window_size) or transformation is full of NaNs
         """
         bars = bars.get_latest_bars(symbol, N=self.window_size)  # Return last window_size bars
-        if len(bars) < self.window_size:
+        if self.window_size is not None and len(bars) < self.window_size:
             return None
         else:
             df = pd.DataFrame(bars)
             df = df.set_index("timestamp").loc[:, ['adj_close', 'open', 'close', 'volume', 'low', 'high']]
             proc = self.transform(df)
             if proc is None:
+                return None
+            proc = proc.dropna()
+            if proc.empty:
                 return None
             last_row = proc.iloc[-1, :]
             # Assert that last timestamp of bars and proc are the same
@@ -48,9 +75,19 @@ class MLPreprocessor:
         pass
 
     @abc.abstractmethod
+    def __eq__(self, other):
+        """This method has to be implemented so tests work properly"""
+        return self.__class__.__name__ == other.__class__.__name__
+
+    @abc.abstractmethod
     def transform(self, data: pd.DataFrame) -> pd.DataFrame:
-        """To be implemented in children classes. Returns transformed df. If it is run for the first
-        time, it also fits internal parametets (e.g. scalers)"""
+        """To be implemented in children classes. Returns transformed df. Fit method must have been called
+        BEFORE first call of this method to fit internal scalers, otherwise it will fail with an Exception"""
+        pass
+
+    @abc.abstractmethod
+    def fit(self, data: pd.DataFrame) -> None:
+        """Fits internal parameters of the transformer for the given data (e.g. scalers)"""
         pass
 
     @classmethod
@@ -99,6 +136,7 @@ class MLPreprocessor:
         retval = dict()
         for symbol in data.symbol_list:
             in_df = data.to_pandas(symbol)
+            self.fit(in_df)
             processed = self.transform(in_df)
             in_df = in_df.loc[:, ["open", "high", "low", "close"]]
             retval[symbol] = processed
@@ -108,7 +146,7 @@ class MLPreprocessor:
 
             for idx, df in enumerate((in_df, processed)):
                 for column in df.columns:
-                    fig.add_trace(go.Scatter(x=df.index, y=df[column], name=column), row=idx+1, col=1)
+                    fig.add_trace(go.Scatter(x=df.index, y=df[column], name=column), row=idx + 1, col=1)
             fig.show()
         return retval
 
@@ -119,21 +157,16 @@ class RLPreprocessorClose(MLPreprocessor):
     https://github.com/Oneirag/Machine-Learning-for-Algorithmic-Trading-Second-Edition/blob/master/22_deep_reinforcement_learning/04_q_learning_for_trading.ipynb
     """
 
-    def __init__(self, data: HistoricCSVDataHandler | None, validation_window_len=252,
-                 normalize=True, print_log=False, window_size=None, close_column="close"):
+    def __init__(self, normalize=True, print_log=False, window_size=None, close_column="close"):
         self.normalize = normalize
         self.print_log = print_log
         self.window_size = window_size or self.window_size
         self.close_column = close_column
         self.scaler = None
-        if data is not None:
-            # Validate all data to fit scaler
-            df = data.to_pandas(data.symbol_list[0]).iloc[:-validation_window_len]
-            self.transform(df)
 
-    def transform(self, data: pd.DataFrame) -> pd.DataFrame | None:
+    def __prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         if data.shape[1] > len(self.columns_of_interest):
-             data = data.loc[:, self.columns_of_interest]
+            data = data.loc[:, self.columns_of_interest]
         close = data.loc[:, self.close_column]
 
         retval = pd.DataFrame(close.pct_change()).rename(columns=dict(close="returns"))
@@ -150,17 +183,36 @@ class RLPreprocessorClose(MLPreprocessor):
         retval['stoch'] = slowd - slowk
         retval['ultosc'] = talib.ULTOSC(data.high, data.low, data.close)
         retval = retval.replace((np.inf, -np.inf), np.nan).dropna()
-        if retval.empty:
+        return retval
+
+    def __eq__(self, other):
+        """Checks if scalers are the same"""
+        if super().__eq__(other):
+            retval = compare_scalers(self.scaler, other.scaler)
+            return retval
+        return False
+
+    def fit(self, data: pd.DataFrame) -> None:
+        processed = self.__prepare_data(data)
+        if not processed.empty:
+            scale_values = processed.iloc[:, 1:].values
+            self.scaler = StandardScaler()
+            self.scaler.fit(scale_values)
+
+    def transform(self, data: pd.DataFrame) -> pd.DataFrame | None:
+        if data.empty:
+            return data  # No data to transform
+        processed = self.__prepare_data(data)
+        if processed.empty:
             return None
         if self.normalize:
-            scale_values = retval.iloc[:, 1:].values
+            scale_values = processed.iloc[:, 1:].values
             if self.scaler is None:
-                self.scaler = StandardScaler()
-                self.scaler.fit(scale_values)
-            retval.iloc[:, 1:] = self.scaler.transform(scale_values)
+                raise ProcessorNotFitException()
+            processed.iloc[:, 1:] = self.scaler.transform(scale_values)
         if self.print_log:
-            logger.info(retval.info())
-        return retval
+            logger.info(processed.info())
+        return processed
 
 
 class RLPreprocessorAdjClose(RLPreprocessorClose):
@@ -180,22 +232,25 @@ class PCA_Preprocessor(MLPreprocessor):
     # column_names = ['adj_close', 'open', 'high', 'low']
     column_names = ['close', 'open', 'high', 'low']
 
-    def __init__(self, data: HistoricCSVDataHandler, n_pca_components=10,
-                 validation_window_len=252, window_size=30, symbol_name: str = None):
+    def __init__(self, n_pca_components=10, window_size=30):
         """
         Fits a pca to the first OHLC data of a certain window prior to current data of given symbol
-        :param data: a HistoricCSVDataHandler with the data of interest
         :param n_pca_components: number of PCA components to retain
-        :param validation_window_len: number of days of validation data (so PCA won't be fitted using these data)
         :param window_size: number of days of the window that will be reduced using PCA (defaults to 30)
         """
         self.n_pca_components = n_pca_components
         self.window_size = window_size
-        self.validation_window_len = validation_window_len
-        self.symbol = symbol_name   # or data.symbol_list[0]
         self.pca = None
         self.pre_scaler = None
         self.post_scaler = None
+
+    def __eq__(self, other):
+        """Checks if all scalers are the same"""
+        if super().__eq__(other):
+            retval = compare_scalers(self.pre_scaler, other.pre_scaler) and \
+                     compare_scalers(self.post_scaler, other.post_scaler)
+            return retval
+        return False
 
     def __prepare_df_for_pca(self, df_pca: pd.DataFrame) -> np.array:
         """Transforms input dataframe into a matrix that can be used for pca analysis """
@@ -241,22 +296,26 @@ class PCA_Preprocessor(MLPreprocessor):
             plt.show()
         return processed_dict
 
-    def transform(self, data: pd.DataFrame) -> pd.DataFrame:
-        # If it is the first call, adjust scalers and PCA
-        if self.post_scaler is None:
-            df = data
-            x = self.__prepare_df_for_pca(df)
-            # self.pre_scaler = StandardScaler()
-            self.pre_scaler = MinMaxScaler()
-            self.pre_scaler.fit(x)
-            X = self.pre_scaler.transform(x)
-            self.pca = PCA(n_components=self.n_pca_components)
-            self.pca.fit(X)
-            pca_out = self.pca.transform(X)
-            # self.post_scaler = StandardScaler()
-            self.post_scaler = MinMaxScaler()
-            self.post_scaler.fit(pca_out)
+    def fit(self, data: pd.DataFrame) -> None:
+        df = data
+        x = self.__prepare_df_for_pca(df)
+        # self.pre_scaler = StandardScaler()
+        self.pre_scaler = MinMaxScaler()
+        self.pre_scaler.fit(x)
+        X = self.pre_scaler.transform(x)
+        self.pca = PCA(n_components=self.n_pca_components)
+        self.pca.fit(X)
+        pca_out = self.pca.transform(X)
+        # self.post_scaler = StandardScaler()
+        self.post_scaler = MinMaxScaler()
+        self.post_scaler.fit(pca_out)
 
+    def transform(self, data: pd.DataFrame) -> pd.DataFrame:
+        # Checks for initialized scalers, otherwise raises exception
+        if self.post_scaler is None:
+            raise ProcessorNotFitException()
+        if data.empty:
+            return data  # If no data there is nothing to transform...
         df_in = data.loc[:, self.column_names]
         x = self.__prepare_df_for_pca(df_in)
         X = self.pre_scaler.transform(x)
@@ -267,6 +326,7 @@ class PCA_Preprocessor(MLPreprocessor):
 
 if __name__ == '__main__':
     from ong_trading.event_driven.data import YahooHistoricalData
+
     data = YahooHistoricalData(None, "ELE.MC")
 
     rl = RLPreprocessorClose()
@@ -275,7 +335,5 @@ if __name__ == '__main__':
     rladj = RLPreprocessorAdjClose()
     rladj.test(data)
 
-    pca = PCA_Preprocessor(data)
+    pca = PCA_Preprocessor()
     pca.test(data)
-
-

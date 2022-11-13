@@ -24,8 +24,6 @@ SOFTWARE.
 """
 from __future__ import annotations
 
-import logging
-# import tempfile
 from typing import Type
 
 import gym
@@ -35,14 +33,10 @@ from gym import spaces
 from gym.utils import seeding
 
 from ong_trading.event_driven.data import YahooHistoricalData
-# from ong_trading.features.preprocess import RLPreprocessorClose
 from ong_trading.features.preprocess import MLPreprocessor
-from ong_trading.ML import get_model_path
-
-logging.basicConfig()
-log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
-log.info('%s logger started.', __name__)
+from ong_trading import logger as log
+from ong_trading.ML.RL.config import ModelConfig
+from ong_trading.utils.utils import fmt_dt
 
 
 class DataSource:
@@ -62,58 +56,144 @@ class DataSource:
 
     """
 
-    def __init__(self, model_name: str, trading_days=252, ticker='AAPL', normalize=True,
-                 train_test_split_date: pd.Timestamp = None, train_start_date: pd.Timestamp = None,
+    def __init__(self, model_name: str, trading_days=252, ticker='AAPL',
+                 train_start: pd.Timestamp = None,
+                 validation_start: pd.Timestamp = None,
+                 test_start: pd.Timestamp = None,
                  preprocessor: Type[MLPreprocessor] = None):
         """
-        Inits data
+        Inits data and splits it into train, validation and test data
         :param model_name: name of the model (needed for storing preprocessors)
         :param trading_days: number of trading days (for minimum dates in step)
         :param ticker: name of the ticker to read
-        :param normalize: true to normalize data in preprocessor
-        :param train_test_split_date: date to split train and test data. Test data starts at this date, while train is
-        previous to it
-        :param train_start_date: start date for train. If None then all available data will be used
-        :param preprocessor: a preprocessor class for preprocess data
+        :param train_start: start date for train. If None then data from the fist date available data will be used
+        :param validation_start: start date for validation. If None, then test_start_date will be used
+        :param test_start: start date for test.
+        :param preprocessor: a preprocessor class for preprocess data (on train data only)
         """
         self.model_name = model_name
         self.ticker = ticker
         self.trading_days = trading_days
-        self.normalize = normalize
         self.data_source = YahooHistoricalData(None, [self.ticker])
-        # self.preprocessor = RLPreprocessorClose(None, normalize=self.normalize)
-        self.preprocessor = preprocessor(self.data_source)
+        self.preprocessor = preprocessor()
 
+        validation_start = validation_start or test_start
         all_data = self.load_data()
-        if train_start_date:
-            all_data = all_data[train_start_date:]
+        if train_start:
+            all_data = all_data[train_start:].dropna()  # Just in case
+        all_index = all_data.index
 
-        # Split between train and test (out of sample) data using train_split_data
-        # Gives the index of the PREVIOUS data (if date not found)
-        index = all_data.index
-        # train_data_slice = slice(None, train_test_split_date)
-        # test_data_slice = slice(train_data_slice, None)
-        self.train_orig_data = all_data[:train_test_split_date]
-        log.info(f"Using {len(self.train_orig_data.index)} training data up to {self.train_orig_data.index[-1]}")
-        assert self.train_orig_data.index[-1] < pd.Timestamp(train_test_split_date), \
-            "Training data includes the first validation data"
-        self.test_orig_data = all_data[train_test_split_date:]
-        log.info(f"Using {len(self.test_orig_data.index)} "
-                 f"({len(self.test_orig_data.index)/len(all_data.index):.2%} of all data) "
-                 f"test data up to {self.test_orig_data.index[-1]}")
-        assert self.test_orig_data.index[0] >= pd.Timestamp(train_test_split_date), \
-            "Test data includes the last train data"
-        # Train data
-        self.train_data = self.preprocessor.transform(self.train_orig_data)
-        self.train_returns = self.train_orig_data.adj_close.pct_change()
-        self.preprocessor.save(get_model_path(self.model_name, "preprocessor"))
-        # Test data
-        self.test_data = self.preprocessor.transform(all_data)[train_test_split_date:]
-        self.test_returns = all_data.adj_close[train_test_split_date:].pct_change()
-        self.min_values = self.train_data.min().to_numpy()
-        self.max_values = self.train_data.max().to_numpy()
+        self._data_types = ("train", "validation", "test")
+        self._features = dict()
+        self._data = dict()
+        self._returns = dict()
+
+        # Do splits between train, validation and test
+        for idx, (type_, start_data, end_data) in enumerate(zip(
+                self._data_types,
+                (train_start, validation_start, test_start),
+                (validation_start, test_start, None))):
+            self._data[type_] = all_data[start_data:end_data].dropna()  # Just in case
+            if type_ == "train":
+                self.preprocessor.fit(self._data[type_])
+                self.preprocessor.save(ModelConfig.model_path("preprocessor"))
+            self._features[type_] = self.preprocessor.transform(all_data)[start_data:end_data].dropna()
+            self._returns[type_] = self._data[type_].adj_close.pct_change()
+            type_index = self._data[type_].index
+            if type_index.empty:
+                log.info(f"No data for {type_} is used")
+            else:
+                log.info(f"{type_} data from: {len(type_index)} data "
+                         f"({len(type_index) / len(all_index):.2%} of all data) "
+                         f"from {fmt_dt(type_index[0])} to {fmt_dt(type_index[-1])}")
+
+        # Assert any data is not overlapping
+        for idx in range(1, len(self._data_types)):
+            this_type = self._data_types[idx]
+            if not self._features[this_type].index.empty:
+                for prev_type in self._data_types[:(idx - 1)]:
+                    if not self._features[prev_type].index.empty:
+                        this_start = self._features[this_type].index[0]
+                        prev_end = self._features[prev_type].index[-1]
+                        assert this_start > prev_end, f"Indexes overlap for types {this_type}({fmt_dt(this_start)}) " \
+                                                      f"and {prev_type}({fmt_dt(prev_end)})"
+
+
+        # # Split between train and test (out of sample) data using train_split_data
+        # # Gives the index of the PREVIOUS data (if date not found)
+        # index = all_data.index
+        # # train_data_slice = slice(None, train_test_split_date)
+        # # test_data_slice = slice(train_data_slice, None)
+        # self.train_orig_data = all_data[:train_test_split_date]
+        # log.info(f"Using {len(self.train_orig_data.index)} training data up to {self.train_orig_data.index[-1]}")
+        # assert self.train_orig_data.index[-1] < pd.Timestamp(train_test_split_date), \
+        #     "Training data includes the first validation data"
+        # self.test_orig_data = all_data[train_test_split_date:]
+        # log.info(f"Using {len(self.test_orig_data.index)} "
+        #          f"({len(self.test_orig_data.index) / len(all_data.index):.2%} of all data) "
+        #          f"test data up to {self.test_orig_data.index[-1]}")
+        # assert self.test_orig_data.index[0] >= pd.Timestamp(train_test_split_date), \
+        #     "Test data includes the last train data"
+        # # Train data
+        # self.train_data = self.preprocessor.transform(self.train_orig_data)
+        # self.train_returns = self.train_orig_data.adj_close.pct_change()
+        # self.preprocessor.save(ModelConfig.model_path("preprocessor"))
+        # # Test data
+        # self.test_data = self.preprocessor.transform(all_data)[train_test_split_date:]
+        # self.test_returns = all_data.adj_close[train_test_split_date:].pct_change()
+        self.min_values = self.train_features.min().to_numpy()
+        self.max_values = self.train_features.max().to_numpy()
         self.step = 0
         self.offset = None
+
+    @property
+    def data_types(self) -> tuple:
+        return self._data_types
+
+    @property
+    def train_features(self) -> pd.DataFrame:
+        return self._features['train']
+
+    @property
+    def validation_features(self) -> pd.DataFrame:
+        return self._features['validation']
+
+    @property
+    def test_features(self) -> pd.DataFrame:
+        return self._features['test']
+
+    def features(self, type_: str) -> pd.DataFrame:
+        return self._features.get(type_)
+
+    @property
+    def train_data(self) -> pd.DataFrame:
+        return self._data['train']
+
+    @property
+    def validation_data(self) -> pd.DataFrame:
+        return self._data['validation']
+
+    @property
+    def test_data(self) -> pd.DataFrame:
+        return self._data['test']
+
+    def data(self, type_: str) -> pd.DataFrame:
+        return self._data.get(type_)
+
+    @property
+    def train_returns(self) -> pd.DataFrame:
+        return self._returns['train']
+
+    @property
+    def validation_returns(self) -> pd.DataFrame:
+        return self._returns['validation']
+
+    @property
+    def test_returns(self) -> pd.DataFrame:
+        return self._returns['test']
+
+    def returns(self, type_: str) -> pd.DataFrame:
+        return self._returns.get(type_)
 
     def load_data(self):
         log.info('loading data for {}...'.format(self.ticker))
@@ -127,6 +207,7 @@ class DataSource:
         #           .sort_index())
         # df = df.loc[:, ['adj_close', 'adj_volume', 'adj_low', 'adj_high']]
         df = df.loc[:, ['adj_close', 'close', 'volume', 'low', 'high', 'open']]
+        df = df.dropna()  # Just in case...
         # df.columns = ['close', 'volume', 'low', 'high']
 
         log.info('got data for {}...'.format(self.ticker))
@@ -134,13 +215,13 @@ class DataSource:
 
     def reset(self):
         """Provides starting index for time series and resets step"""
-        high = len(self.train_data.index) - self.trading_days
+        high = len(self.train_features.index) - self.trading_days
         self.offset = np.random.randint(low=0, high=high)
         self.step = 0
 
     def take_step(self):
         """Returns data for current trading day and done signal"""
-        obs = self.train_data.iloc[self.offset + self.step].values
+        obs = self.train_features.iloc[self.offset + self.step].values
         if self.offset + self.step == 218:
             pass
         ret = self.train_returns.iat[self.offset + self.step]
@@ -150,7 +231,7 @@ class DataSource:
 
     def take_all_steps(self):
         """Returns data for all steps at once"""
-        obs = self.train_data.iloc[self.offset:(self.offset + self.trading_days)].values
+        obs = self.train_features.iloc[self.offset:(self.offset + self.trading_days)].values
         rets = self.train_returns.iloc[self.offset:(self.offset + self.trading_days)].values
         return rets, obs
 
@@ -260,8 +341,9 @@ class TradingEnvironment(gym.Env):
                  time_cost_bps=1e-4,
                  ticker='AAPL',
                  model_name: str = "",
-                 train_split_date: pd.Timestamp | int = None,
-                 train_start_date: pd.Timestamp | int = None,
+                 train_start: pd.Timestamp | int = None,
+                 validation_start: pd.Timestamp | int = None,
+                 test_start: pd.Timestamp | int = None,
                  preprocessor=None,
                  ):
         self.model_name = model_name
@@ -271,8 +353,9 @@ class TradingEnvironment(gym.Env):
         self.time_cost_bps = time_cost_bps
         self.data_source = DataSource(trading_days=self.trading_days,
                                       ticker=ticker, model_name=self.model_name,
-                                      train_test_split_date=train_split_date,
-                                      train_start_date=train_start_date,
+                                      train_start=train_start,
+                                      validation_start=validation_start,
+                                      test_start=test_start,
                                       preprocessor=preprocessor)
         self.simulator = TradingSimulator(steps=self.trading_days,
                                           trading_cost_bps=self.trading_cost_bps,

@@ -246,7 +246,7 @@ class HistoricCSVDataHandler(DataHandler):
                         break
             except StopIteration:
                 self.continue_backtest = False
-                self.events.put(MarketEvent())
+                # self.events.put(MarketEvent())
             else:
                 if bar is not None:
                     self.latest_symbol_data[s].append(bar)
@@ -295,7 +295,6 @@ class YahooHistoricalData(HistoricCSVDataHandler):
             bid_offer = dict()
         bid_offer = {s: bid_offer.get(s, 0) for s in symbol_list}
         super().__init__(events, None, symbol_list, bid_offer=bid_offer, start_date=start_date, end_date=end_date)
-        self.names.append('adj_close')  # So adjusted close is there
         # Download interest rates
         bars = list(self.bar_data.values())[0]
         bars_idx = [b.timestamp for b in bars]

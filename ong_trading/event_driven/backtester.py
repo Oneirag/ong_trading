@@ -69,6 +69,10 @@ class Backtester:
         self.signal_events = None
         self.last_processed_timestamp = None
 
+    def reset(self):
+        """Needed for running tests on this class"""
+        self.__init_objects()
+
     def __init_objects(self, init_broker=True, init_portfolio=True, init_strategy=True,
                        strategy_args=None,
                        strategy_kwargs=None):

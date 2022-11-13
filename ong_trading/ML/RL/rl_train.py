@@ -16,7 +16,11 @@ from gym.envs.registration import register
 
 from ong_trading.ML.RL.config import ModelHyperParams, ModelConfig
 from ong_trading.ML.RL.ddqna_agent import DDQNAgent
+from ong_trading.event_driven.performance import annualised_returns
+from ong_trading.utils.utils import format_time
 from ong_trading.vectorized.pnl import pnl_positions
+from ong_trading.ML.RL.trading_env import DataSource
+from ong_trading.event_driven.performance import OutputAnalyzer
 
 try:
     # Disable all GPUS
@@ -40,11 +44,58 @@ else:
     print('Using CPU')
 
 
-# Helper function
-def format_time(t):
-    m_, s = divmod(t, 60)
-    h, m = divmod(m_, 60)
-    return '{:02.0f}:{:02.0f}:{:02.0f}'.format(h, m, s)
+class Evaluator:
+    """Gives the annualised valuation of the strategy in the whole training and validation data set"""
+
+    strategy_names = "benchmark", "strategy"
+
+    def __init__(self, ddqn: DDQNAgent, data_source: DataSource):
+        self.ddqn = ddqn
+        self.data_source = data_source
+        self.strat = dict()
+        # Stored for testing purposes
+        self.features = dict()
+        self.positions = dict()
+        self.prices = dict()
+        self.initial_cash = dict()
+        self.pnl = dict()
+
+        for data_type in self.data_source.data_types:
+            features = self.data_source.features(data_type)
+            if features.empty:
+                continue
+            else:
+                self.features[data_type] = features.values
+                self.pnl[data_type] = dict()
+                self.strat[data_type] = dict()
+            qs = self.ddqn.online_network.predict_on_batch(self.features[data_type])
+            self.positions[data_type] = np.argmax(qs, axis=1).astype(float) - 1.0
+            data = data_source.data(data_type)
+            self.prices[data_type] = data.adj_close.values[-len(self.positions[data_type]):]
+            self.initial_cash[data_type] = data.close.values[-len(self.positions[data_type]):][0]
+            for strategy_name in self.strategy_names:
+                if strategy_name == "benchmark":
+                    positions = np.ones_like(self.positions[data_type])
+                else:
+                    positions = self.positions[data_type]
+                self.pnl[data_type][strategy_name] = pnl_positions(positions,
+                                                                   bid=self.prices[data_type],
+                                                                   offer=self.prices[data_type])
+                self.strat[data_type][strategy_name] = OutputAnalyzer.from_pnl(self.pnl[data_type][strategy_name],
+                                                                               initial_cash=self.initial_cash[data_type])
+
+    def __str__(self):
+        """ Returns a string with representation of results for all available data_types"""
+        text = ""
+        for data_type in self.data_source.data_types:
+            if data_type in self.strat:
+                strat_oa = self.strat[data_type]['strategy']
+                bench_oa = self.strat[data_type]['benchmark']
+                if strat_oa is not None:
+                    text += f"{data_type}: {strat_oa.total_return_pct_annualised(): >7.2%} " \
+                            f"({bench_oa.total_return_pct_annualised(): >7.2%} mkt) " \
+                            f"Sh: {strat_oa.sharpe(): >7.2%}| "
+        return text
 
 
 def create_tradingenv_ddqn() -> tuple:
@@ -54,11 +105,12 @@ def create_tradingenv_ddqn() -> tuple:
         entry_point='ong_trading.ML.RL.trading_env:TradingEnvironment',
         max_episode_steps=ModelConfig.trading_days,
         kwargs=dict(ticker=ModelConfig.ticker,
-                    model_name=ModelConfig.model_name,
-                    trading_cost_bps=1e-3,
-                    time_cost_bps=1e-4,
-                    train_split_date=ModelConfig.train_split_date,
-                    train_start_date=ModelConfig.train_start_date,
+                    model_name=ModelConfig.full_model_name,
+                    trading_cost_bps=ModelConfig.trading_cost_bps,
+                    time_cost_bps=ModelConfig.time_cost_bps,
+                    train_start=ModelConfig.train_start,
+                    validation_start=ModelConfig.validation_start,
+                    test_start=ModelConfig.test_start,
                     preprocessor=ModelConfig.preprocessor)
     )
 
@@ -74,7 +126,7 @@ def create_tradingenv_ddqn() -> tuple:
     # We will use TensorFlow to create our Double Deep Q-Network .
     tf.keras.backend.clear_session()
 
-    ddqn = DDQNAgent(state_dim=state_dim, num_actions=num_actions, model_name=ModelConfig.model_name,
+    ddqn = DDQNAgent(state_dim=state_dim, num_actions=num_actions, model_name=ModelConfig.full_model_name,
                      random_seed=ModelConfig.random_seed,
                      **asdict(ModelHyperParams()))
 
@@ -143,19 +195,11 @@ def train(max_episodes: int = ModelConfig.max_episodes) -> dict:
         diffs.append(diff)
         if episode % 10 == 0:
             ddqn.save_model()
-            # Get out of training data to test model
-            oot_qs = ddqn.online_network.predict_on_batch(trading_environment.data_source.test_data.values)
-            positions = np.argmax(oot_qs, axis=1).astype(float) - 1.0
-            oot_prices = trading_environment.data_source.test_orig_data.adj_close.values
-            pnl = pnl_positions(positions, bid=oot_prices, offer=oot_prices)
-            oot_pnl_pct = 100 * pnl[-1] / oot_prices[0]
-            benchmark_oot_pnl_pct = 100 * (oot_prices[-1] / oot_prices[0] - 1)  # Buy and hold
-            extra_text = f"Out of sample: {oot_pnl_pct:>5.2f}% ({benchmark_oot_pnl_pct:>5.2f}% mkt)"
-
             track_results(episode, np.mean(navs[-100:]), np.mean(navs[-10:]),
                           np.mean(market_navs[-100:]), np.mean(market_navs[-10:]),
                           np.sum([s > 0 for s in diffs[-100:]]) / min(len(diffs), 100),
-                          time() - start, ddqn.epsilon, extra_text)
+                          time() - start, ddqn.epsilon,
+                          extra_text=str(Evaluator(ddqn, trading_environment.data_source)))
         # if len(diffs) > 25 and all([r > 0 for r in diffs[-25:]]):
         #     print(result.tail())
         #     break

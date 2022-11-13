@@ -140,12 +140,21 @@ class MachineLearningStrategy(Strategy):
         self.preprocessor = preprocessor
         self.model = tf.keras.models.load_model(model_path)
         self.model.summary()
+        # Stores model inputs and outputs just for testing purposes
+        self.model_data = list()
+        self.model_features = list()
+        self.model_dates = list()
+        self.model_outputs = list()
 
     def calculate_signals(self, event):
         for symbol in self.symbol_list:     # All symbols are evaluated with the same model
-            model_input = self.preprocessor.transform_bars(self.bars, symbol=symbol)
+            model_input = self.preprocessor.transform_bars(bars=self.bars, symbol=symbol)
             if model_input is not None:
+                self.model_data.append(self.bars.get_latest_bars(symbol)[-1])
+                self.model_features.append(model_input)
+                self.model_dates.append(self.bars.get_latest_bars(symbol)[-1].timestamp)
                 model_output = self.model(model_input, training=False)
+                self.model_outputs.append(model_output)
                 best_action = np.argmax(model_output) - 1      # short, neutral, long. Maps to DirectionType
             else:
                 best_action = 0     # neutral

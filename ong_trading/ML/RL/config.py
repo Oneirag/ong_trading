@@ -5,7 +5,7 @@ General configuration of the Reinforcement learning model:
 """
 from dataclasses import dataclass, field
 from ong_trading.ML import get_model_path as gmp
-from ong_trading.features.preprocess import PCA_Preprocessor, RLPreprocessorClose
+from ong_trading.features.preprocess import PCA_Preprocessor, RLPreprocessorClose, MLPreprocessor
 from functools import partial
 
 
@@ -34,40 +34,45 @@ class ModelHyperParamsLowerGamma(ModelHyperParamsBase):
 
 @dataclass
 class ModelConfigBase:
+    trading_cost_bps = 1e-3
+    time_cost_bps = 1e-4
     random_seed = 42
     trading_days = 252
     ticker = "ELE.MC"
-    inner_model_name = ""
+    # ticker = "SAN.MC"
+    _model_name = ""     # Is added to the ticker to create the model name
     # Number of training episodes
     max_episodes = 1000
     max_episodes = 1500
-    # A date for which validation will start (so training will NOT use this date)
-    train_split_date = "2022-01-01"
-    train_start_date = "2020-01-01"
-    train_start_date = None
 
-    @classmethod
-    def model_path(cls, extra):
-        return gmp(cls.model_name, extra)
+    train_start = "2020-01-01"
+    train_start = None
+    validation_start = None
+    test_start = "2022-01-01"
+
+    preprocessor: MLPreprocessor = None
 
     @classmethod
     @property
-    def model_name(cls) -> str:
-        return cls.ticker + "_" + cls.inner_model_name
+    def full_model_name(cls) -> str:
+        return cls.ticker + "_" + cls._model_name
+
+    @classmethod
+    def model_path(cls, extra):
+        return gmp(cls.full_model_name, extra)
 
 
 class ModelConfigIndicators(ModelConfigBase):
-    inner_model_name = "indicadores"
+    _model_name = "indicadores"
     preprocessor = partial(RLPreprocessorClose, normalize=True)
 
 
 class ModelConfigPCA(ModelConfigBase):
-    inner_model_name = "pca"
-    preprocessor = partial(PCA_Preprocessor, validation_window_len=ModelConfigBase.train_split_date,
-                           symbol_name=ModelConfigBase.ticker)
+    _model_name = "pca"
+    preprocessor = partial(PCA_Preprocessor, symbol_name=ModelConfigBase.ticker)
 
 
 ModelConfig = ModelConfigIndicators
-ModelConfig = ModelConfigPCA
+# ModelConfig = ModelConfigPCA
 ModelHyperParams = ModelHyperParamsBase
 ModelHyperParams = ModelHyperParamsLowerGamma

@@ -1,8 +1,8 @@
 ong_utils@git+https://github.com/Oneirag/ong_utils.git
 pandas~=1.4.2
-yfinance~=0.1.70
-pandas-datareader   # Downloads data from google finance
+yfinance
+# pandas-datareader   # Downloads data from google finance
 matplotlib
-numpy~=1.23.3
+numpy
 plotly~=5.7.0
 ujson~=5.2.0        # for parsing json date from interest rates
