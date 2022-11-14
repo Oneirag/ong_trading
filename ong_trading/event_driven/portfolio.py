@@ -607,6 +607,12 @@ class NaivePortfolio(Portfolio):
         curve['gross_equity_curve'] = (1.0 + curve['gross_returns']).cumprod()
         self.equity_curve = curve
 
+    def get_analysis(self) -> OutputAnalyzer:
+        if self.equity_curve is None:
+            self.create_equity_curve_dataframe()
+        analysis = OutputAnalyzer(equity_curve=self.equity_curve['total'])
+        return analysis
+
     def output_summary_stats(self, plot=True, model_name: str = ""):
         """
         Creates a list of summary statistics for the portfolio such
@@ -620,7 +626,7 @@ class NaivePortfolio(Portfolio):
         bars = self.bars.get_latest_bars(self.bars.symbol_list[0], N=None)
         df_bars = pd.DataFrame(bars).set_index("timestamp")
         df_pos = pd.DataFrame(self.all_positions).set_index("datetime")
-        analysis = OutputAnalyzer(equity_curve=self.equity_curve['total'])
+        analysis = self.get_analysis()
         stats = analysis.get_stats()
         print(stats)
         if plot:
@@ -648,7 +654,7 @@ class NaivePortfolio(Portfolio):
                  ("Total Return", returns[-1])
                  ]
 
-        if False and plot:
+        if True or (False and plot):
             df_pos = pd.DataFrame(self.all_positions)
             df_pos.set_index('datetime', inplace=True)
 
@@ -656,7 +662,7 @@ class NaivePortfolio(Portfolio):
             df_bars = pd.DataFrame(bars).set_index("timestamp")
             df_bars = df_bars.reindex(index=df_pos.index, method='pad')
             from plotly.subplots import make_subplots
-            df_signals = pd.DataFrame(self.signals, index=df_pos.index).reindex(index=df_bars.index)
+            df_signals = pd.DataFrame(self.signals).set_index("datetime").reindex(index=df_bars.index)
 
             fig = make_subplots(rows=3, cols=1,
                                 shared_xaxes=True,
@@ -667,7 +673,7 @@ class NaivePortfolio(Portfolio):
             symbol = self.symbol_list[0]
 
             plot_chart(fig, x=df_pos.index, y=df_pos[symbol], name=symbol, row=1, col=1, symbol=symbol)
-            plot_chart(fig, x=df_pos.index, y=self.equity_curve['cash'], name="Gross", row=2, col=1, symbol=symbol)
+            # plot_chart(fig, x=df_pos.index, y=self.equity_curve['cash'], name="Gross", row=2, col=1, symbol=symbol)
             plot_chart(fig, x=df_pos.index, y=self.equity_curve['total'], name="Total", row=2, col=1, symbol=symbol)
             plot_chart(fig, x=df_bars.index, y=df_bars.close, name="Close", row=3, col=1,
                        signals=df_signals[symbol], symbol=symbol)

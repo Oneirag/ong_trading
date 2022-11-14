@@ -31,8 +31,8 @@ class TestData(unittest.TestCase):
                     # self.assertEqual(data.open_ask - data.open, bid_offer)
                     # self.assertEqual(data.open_bid - data.open, -bid_offer)
                     for side, spread in {"bid": -bid_offer, "ask": bid_offer}.items():
-                        self.assertEqual(getattr(data, quote + "_" + side) - getattr(data, quote), spread,
-                                         f"Wrong bid offer spread for {quote}_{side} in {data}")
+                        self.assertAlmostEqual(getattr(data, quote + "_" + side) - getattr(data, quote), spread,
+                                               msg=f"Wrong bid offer spread for {quote}_{side} in {data}")
             n_bars.append(self.events.qsize())
             print(f"Rep {rep}, n_bars={n_bars[-1]}")
             bars.reset()

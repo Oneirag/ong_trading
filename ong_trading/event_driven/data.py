@@ -7,7 +7,6 @@ from __future__ import annotations
 import datetime
 import os
 import os.path
-import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -15,7 +14,7 @@ import pandas as pd
 import yfinance as yf
 
 from ong_trading import logger
-from ong_trading.event_driven.event import MarketEvent
+from ong_trading.event_driven.event import MarketEvent, BacktestingEndEvent
 from ong_trading.event_driven.rates import Rates
 
 prepare_data_cfg = {
@@ -246,7 +245,7 @@ class HistoricCSVDataHandler(DataHandler):
                         break
             except StopIteration:
                 self.continue_backtest = False
-                # self.events.put(MarketEvent())
+                self.events.put(BacktestingEndEvent())
             else:
                 if bar is not None:
                     self.latest_symbol_data[s].append(bar)

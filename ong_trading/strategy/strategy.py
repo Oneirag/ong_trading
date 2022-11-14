@@ -37,6 +37,10 @@ class Strategy(ABC):
         self.bars = bars
         self.symbol_list = self.bars.symbol_list
         self.events = events
+        self.last_signal = dict()
+        # Create initial neutral signals:
+        for symbol in self.bars.symbol_list:
+            self.last_signal[symbol] = SignalEvent(symbol, None, DirectionType.NEUTRAL)
 
     @abstractmethod
     def calculate_signals(self, event):
@@ -44,6 +48,20 @@ class Strategy(ABC):
         Provides the mechanisms to calculate the list of signals.
         """
         raise NotImplementedError("Should implement calculate_signals()")
+
+    def put_signal(self, new_signal: SignalEvent, force_emit=False):
+        """
+        Puts a new signal into event queue.
+        A signal is only emitted if it is different to the last signal. If it the first signal ever, it is emitted
+        if is not the same type as initial position (neutral by default)
+        :param new_signal: the new signal
+        :param force_emit: True to emit all signals anyway
+        :return: None
+        """
+        last_signal = self.last_signal.get(new_signal.symbol)
+        if force_emit or (new_signal != last_signal):
+            self.events.put(new_signal)
+        self.last_signal[new_signal.symbol] = new_signal
 
 
 class BuyAndHoldStrategy(Strategy):
@@ -88,7 +106,6 @@ class BuyAndHoldStrategy(Strategy):
         Parameters
         event - A MarketEvent object.
         """
-        #if event.type == 'MARKET':
         if isinstance(event, MarketEvent):
             for s in self.symbol_list:
                 bars = self.bars.get_latest_bars(s, N=1)
@@ -97,7 +114,7 @@ class BuyAndHoldStrategy(Strategy):
                         # (Symbol, Datetime, Type = LONG, SHORT or EXIT)
                         # signal = SignalEvent(bars[0][0], bars[0][1], 'LONG')
                         signal = SignalEvent(bars[0].symbol, bars[0].timestamp, DirectionType.BUY)
-                        self.events.put(signal)
+                        self.put_signal(signal)
                         # self.bought[s] = True     # Comment this part to send permanently a buy signal
 
 
@@ -110,7 +127,6 @@ class MACrossOverStrategy(Strategy):
         self.short = short
         self.long = long
         self.positions = {s: 0 for s in self.bars.symbol_list}
-        self.last_signal = 0
 
     def calculate_signals(self, event):
         # Calculate both means
@@ -127,9 +143,7 @@ class MACrossOverStrategy(Strategy):
                     # self.logger.debug(f"Go short in {symbol} in date {short_bars[-1].timestamp}")
                     signal = SignalEvent(symbol, short_bars[-1].timestamp, DirectionType.SELL)
                 # Avoid sending multiple signals in the same sense
-                if signal.signal_type.value != self.last_signal:
-                    self.last_signal = signal.signal_type.value
-                    self.events.put(signal)
+                self.put_signal(signal)
 
 
 class MachineLearningStrategy(Strategy):
@@ -159,7 +173,7 @@ class MachineLearningStrategy(Strategy):
             else:
                 best_action = 0     # neutral
             signal = SignalEvent(symbol, self.bars.get_latest_bars(symbol)[-1].timestamp, DirectionType(best_action))
-            self.events.put(signal)
+            self.put_signal(signal)
 
 
 class PersistenceStrategy(Strategy):
@@ -186,7 +200,7 @@ class PersistenceStrategy(Strategy):
                 else:
                     direction = DirectionType.SELL
                 signal = SignalEvent(symbol, timestamp, direction)
-                self.events.put(signal)
+                self.put_signal(signal)
 
 
 class ManualStrategy(Strategy):
@@ -208,4 +222,4 @@ class ManualStrategy(Strategy):
             else:
                 direction = DirectionType.NEUTRAL
             signal = SignalEvent(symbol, event.timestamp, direction)
-            self.events.put(signal)
+            self.put_signal(signal)

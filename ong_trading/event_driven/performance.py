@@ -154,7 +154,7 @@ class OutputAnalyzer:
 
         all_signals = np.sign(df_pos)
         all_signals[np.diff(all_signals, prepend=0) == 0] = np.nan
-        df_signals = all_signals.dropna().reindex(index=df_bars.index)
+        df_signals = all_signals.dropna().reindex(index=df_bars.index).shift(-1)
 
         fig = make_subplots(rows=3, cols=1,
                             shared_xaxes=True,

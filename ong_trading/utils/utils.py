@@ -14,3 +14,10 @@ def fmt_dt(dt: pd.Timestamp) -> str:
     """Formats a date for printing"""
     # return dt.strftime("%x")
     return dt.strftime("%d%b%y")
+
+
+if __name__ == '__main__':
+    for t in .5, 5, 50, 500, 5000, 50000, 500000:
+        print(t, format_time(t))
+
+

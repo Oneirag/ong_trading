@@ -11,7 +11,7 @@ from ong_trading.event_driven.data import YahooHistoricalData
 from ong_trading.strategy.strategy import MACrossOverStrategy
 from ong_trading.event_driven.portfolio import NaivePortfolio
 from ong_trading.event_driven.execution import SimulatedBroker
-from ong_trading.helpers import InstrumentType
+from ong_trading.event_driven.utils import InstrumentType
 from ong_trading.event_driven.event import MarketEvent, SignalEvent, OrderEvent, FillEvent, UserNotifyEvent
 
 events = Queue()

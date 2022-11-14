@@ -52,7 +52,7 @@ class Evaluator:
     def __init__(self, ddqn: DDQNAgent, data_source: DataSource):
         self.ddqn = ddqn
         self.data_source = data_source
-        self.strat = dict()
+        self.output_analyser = dict()
         # Stored for testing purposes
         self.features = dict()
         self.positions = dict()
@@ -67,7 +67,7 @@ class Evaluator:
             else:
                 self.features[data_type] = features.values
                 self.pnl[data_type] = dict()
-                self.strat[data_type] = dict()
+                self.output_analyser[data_type] = dict()
             qs = self.ddqn.online_network.predict_on_batch(self.features[data_type])
             self.positions[data_type] = np.argmax(qs, axis=1).astype(float) - 1.0
             data = data_source.data(data_type)
@@ -81,16 +81,17 @@ class Evaluator:
                 self.pnl[data_type][strategy_name] = pnl_positions(positions,
                                                                    bid=self.prices[data_type],
                                                                    offer=self.prices[data_type])
-                self.strat[data_type][strategy_name] = OutputAnalyzer.from_pnl(self.pnl[data_type][strategy_name],
-                                                                               initial_cash=self.initial_cash[data_type])
+                self.output_analyser[data_type][strategy_name] = OutputAnalyzer.from_pnl(
+                    self.pnl[data_type][strategy_name],
+                    initial_cash=self.initial_cash[data_type])
 
     def __str__(self):
         """ Returns a string with representation of results for all available data_types"""
         text = ""
         for data_type in self.data_source.data_types:
-            if data_type in self.strat:
-                strat_oa = self.strat[data_type]['strategy']
-                bench_oa = self.strat[data_type]['benchmark']
+            if data_type in self.output_analyser:
+                strat_oa = self.output_analyser[data_type]['strategy']
+                bench_oa = self.output_analyser[data_type]['benchmark']
                 if strat_oa is not None:
                     text += f"{data_type}: {strat_oa.total_return_pct_annualised(): >7.2%} " \
                             f"({bench_oa.total_return_pct_annualised(): >7.2%} mkt) " \
@@ -149,7 +150,6 @@ def track_results(episode, nav_ma_100, nav_ma_10,
 
 
 def train(max_episodes: int = ModelConfig.max_episodes) -> dict:
-
     trading_environment, ddqn = create_tradingenv_ddqn()
     max_episode_steps = trading_environment.spec.max_episode_steps
 
@@ -257,10 +257,8 @@ def plot_results(training_results: pd.DataFrame):
 
 
 if __name__ == '__main__':
-
     results = train(ModelConfig.max_episodes)
     plot_results(results)
-
 
     """
     10 | 00:00:00 | Agent: -20.3% (-20.3%) | Market:   6.1% (  6.1%) | Wins: 20.0% | eps:  0.960

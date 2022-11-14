@@ -36,6 +36,11 @@ class Event(object):
         return f"{class_name}: {self.__dict__}"
 
 
+class BacktestingEndEvent(Event):
+    """Event sent when backtesting finishes, to prevent queue.get() to stop execution and being blocked"""
+    pass
+
+
 class MarketEvent(Event):
     """
     Handles the event of receiving a new market update with
@@ -75,6 +80,15 @@ class SignalEvent(Event):
         self.signal_type = signal_type
         # This variable was missing in the web post and NaivePortfolio would not work otherwise
         self.strength = strength
+
+    def __eq__(self, other):
+        """Signals are equal if everything is equal but its datetime"""
+        if isinstance(other, self.__class__):
+            if self.signal_type == other.signal_type:
+                if self.symbol == other.symbol:
+                    if self.strength == other.strength:
+                        return True
+        return False
 
 
 class OrderEvent(Event):

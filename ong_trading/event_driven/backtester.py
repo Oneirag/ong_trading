@@ -3,18 +3,21 @@ Class to wrap basic backtesting
 """
 from __future__ import annotations
 
-import logging
+from time import time
 from itertools import product
 from typing import Type
 
+
 from queue import Queue, Empty
 import pandas as pd
+from ong_utils import OngTimer
 from ong_trading import logger
 from ong_trading.event_driven.data import DataHandler, HistoricCSVDataHandler, YahooHistoricalData
 from ong_trading.event_driven.portfolio import NaivePortfolio
 from ong_trading.strategy.strategy import Strategy
 from ong_trading.event_driven.execution import SimulatedBroker
-from ong_trading.event_driven.event import FillEvent, OrderEvent, SignalEvent, MarketEvent, UserNotifyEvent
+from ong_trading.event_driven.event import FillEvent, OrderEvent, SignalEvent, MarketEvent, UserNotifyEvent, \
+    BacktestingEndEvent
 from ong_trading.helpers.overload import singledispatch
 from ong_trading.event_driven.utils import InstrumentType
 
@@ -68,6 +71,8 @@ class Backtester:
         self.fill_events = None
         self.signal_events = None
         self.last_processed_timestamp = None
+        self.timer = OngTimer(logger=logger)
+        self.timer_name = "Backtesting"
 
     def reset(self):
         """Needed for running tests on this class"""
@@ -132,6 +137,10 @@ class Backtester:
         # TODO: implement a better user notification (e.g. use a Telegram bot, send an email...)
         print(event)
 
+    @singledispatch(BacktestingEndEvent)
+    def process_event(self, event: BacktestingEndEvent):
+        self.timer.toc(self.timer_name)
+
     def run(self, print_debug_msg: bool = False, strategy_args=None, strategy_kwargs=None,
             bars_from: int = 0, bars_to: int = -1) -> Type[NaivePortfolio]:
         """
@@ -143,6 +152,7 @@ class Backtester:
         :param bars_to: number of bars for stopping the run (default = all)
         :return: the portfolio object, so you can use portfolio.output_summary_stats() to get stats
         """
+        self.timer.tic(self.timer_name)
         self.events.empty()  # resets queue
         self.data.reset()  # resets bars
         self.__init_objects(strategy_kwargs=strategy_kwargs, strategy_args=strategy_args)
