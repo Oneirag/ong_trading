@@ -71,21 +71,21 @@ def create_drawdowns(equity_curve) -> tuple:
 
 class OutputAnalyzer:
     """Class to analyze portfolio returns"""
-    def __init__(self, equity_curve: pd.DataFrame | np.ndarray | pd.Series = None):
+    def __init__(self, cash_curve: pd.DataFrame | np.ndarray | pd.Series = None):
         """Returns are porcentual returns. Initialize either with pnl and initial cash or with equity curve"""
-        self.equity_curve = to_np(equity_curve)
-        self.initial_cash = self.equity_curve[0]
-        self.returns = np.empty_like(self.equity_curve, dtype=float)
-        self.returns[1:] = np.diff(self.equity_curve) / self.equity_curve[:-1]
+        self.cash_curve = to_np(cash_curve)
+        self.initial_cash = self.cash_curve[0]
+        self.returns = np.empty_like(self.cash_curve, dtype=float)
+        self.returns[1:] = np.diff(self.cash_curve) / self.cash_curve[:-1]
         self.returns[0] = 0         # Fill with 0, so this means no change in pnl in t=0
         # self.cum_returns = (1 + self.returns).cumprod()
         self.__drawdown = None
+        self.equity_curve = (1.0 + self.returns).cumprod()
 
     @classmethod
     def from_pnl(cls, mtm: pd.DataFrame | pd.Series | np.ndarray, initial_cash: float) -> OutputAnalyzer:
-        # equity_curve = np.cumsum(to_np(pnl)) + initial_cash
-        equity_curve = to_np(mtm) + initial_cash
-        return OutputAnalyzer(equity_curve)
+        cash_curve = to_np(mtm) + initial_cash
+        return OutputAnalyzer(cash_curve)
 
     def sharpe(self) -> float:
         ratio = create_sharpe_ratio(self.returns)
@@ -114,15 +114,15 @@ class OutputAnalyzer:
 
     def total_return(self):
         """Total return in cash"""
-        return self.equity_curve[-1] - self.equity_curve[0]
+        return self.cash_curve[-1] - self.cash_curve[0]
 
     def total_return_pct(self):
         """Total return as a percentage of initial cash"""
-        return self.total_return() / self.equity_curve[0]
+        return self.total_return() / self.cash_curve[0]
 
     def total_return_pct_annualised(self):
         return_pct = self.total_return_pct()
-        return annualised_returns(return_pct, len(self.equity_curve))
+        return annualised_returns(return_pct, len(self.cash_curve))
 
     def get_stats(self):
         total_return_pct = self.total_return_pct()
@@ -154,7 +154,7 @@ class OutputAnalyzer:
 
         all_signals = np.sign(df_pos)
         all_signals[np.diff(all_signals, prepend=0) == 0] = np.nan
-        df_signals = all_signals.dropna().reindex(index=df_bars.index).shift(-1)
+        df_signals = all_signals.dropna().reindex(index=df_bars.index)
 
         fig = make_subplots(rows=3, cols=1,
                             shared_xaxes=True,
@@ -164,7 +164,7 @@ class OutputAnalyzer:
 
         plot_chart(fig, x=df_pos.index, y=df_pos, name=symbol, row=1, col=1, symbol=symbol)
         # plot_chart(fig, x=df_pos.index, y=self.pnl, name="PnL", row=2, col=1, symbol=symbol)
-        plot_chart(fig, x=df_pos.index, y=self.equity_curve, name="PnL", row=2, col=1, symbol=symbol)
+        plot_chart(fig, x=df_pos.index, y=self.cash_curve, name="PnL", row=2, col=1, symbol=symbol)
         plot_maxdd(fig, df_pos.index[self.drawdown_idx_start()], df_pos.index[self.drawdown_idx_end()], row=2, col=1)
 
         # plot_chart(fig, x=df_pos.index, y=self.equity_curve['cash'], name="Gross", row=2, col=1, symbol=self.symbol)
@@ -197,7 +197,7 @@ if __name__ == '__main__':
     df_prices = pd.DataFrame(prices, columns=["close"], index=pnl.index)
     for p in pnl, pnl.close, pnl.close.values:
         result = OutputAnalyzer.from_pnl(p, initial_cash=initial_cash)
-        pnls.append(result.equity_curve)
+        pnls.append(result.cash_curve)
         returns.append(result.returns)
     for test_vector, test_vector_name in zip((pnls, returns), ("Pnl", "Returns")):
         for prev, next_ in zip(test_vector[:-1], test_vector[1:]):

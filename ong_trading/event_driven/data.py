@@ -20,7 +20,8 @@ from ong_trading.event_driven.rates import Rates
 prepare_data_cfg = {
     "ELE.MC": {
         "start_date": "2001-01-01",  # remove data prior to that date
-        "dividend_threshold": 0.15  # dividend threshold
+        # "dividend_threshold": 0.15  # dividend threshold
+        "dividend_threshold": 0.000001  # dividend threshold
     }
 }
 

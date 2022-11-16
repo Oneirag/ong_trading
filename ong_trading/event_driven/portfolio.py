@@ -52,8 +52,8 @@ class BasePortfolio(Portfolio):
 
     def update_signal(self, signal: SignalEvent):
         """Send an order equal to the signal minus the position"""
-        if not isinstance(signal, SignalEvent):
-            return
+        # if not isinstance(signal, SignalEvent):
+        #     return
         symbol = signal.symbol
         if signal.signal_type == DirectionType.BUY:
             position = signal.strength * self.qty
@@ -75,15 +75,15 @@ class BasePortfolio(Portfolio):
             self.events.put(order)
 
     def update_fill(self, fill: FillEvent):
-        if not isinstance(fill, FillEvent):
-            return
+        # if not isinstance(fill, FillEvent):
+        #     return
         self.positions[-1][fill.symbol] += fill.position * fill.quantity
         self.positions[-1]["timestamp"] = fill.timeindex
         self.holdings[-1]["timestamp"] = fill.timeindex
 
     def update_timeindex(self, mkt_event: MarketEvent):
-        if not isinstance(mkt_event, MarketEvent):
-            return
+        # if not isinstance(mkt_event, MarketEvent):
+        #     return
         timestamp = self.bars.get_latest_bars(self.symbol_list[0])[0].timestamp
         self.positions.append(self.positions[-1].copy())
         self.holdings.append(self.holdings[-1].copy())
@@ -120,12 +120,11 @@ class BasePortfolio(Portfolio):
         plt.figure()
         ax = plt.subplot(2, 1, 1)
         ax.plot(df_pos)
-        ax = plt.subplot(2,1,2)
+        ax = plt.subplot(2, 1, 2)
         ax.plot(self.equity_curve['cash'])
         plt.show()
 
         return stats
-
 
         pass
 
@@ -400,7 +399,7 @@ class NaivePortfolio(Portfolio):
         if self.instrument not in InstrumentType.__members__.values():
             raise ValueError(f"Instrument {self.instrument} not valid")
 
-        self.signals = list()       # keep record of signals
+        self.signals = list()  # keep record of signals
 
     def construct_all_positions(self):
         """
@@ -533,10 +532,9 @@ class NaivePortfolio(Portfolio):
         Updates the portfolio current positions and holdings
         from a FillEvent.
         """
-        # if fill.type == "FILL":     #isinstance(fill, FillEvent):
-        if isinstance(fill, FillEvent):
-            self.update_positions_from_fill(fill)
-            self.update_holdings_from_fill(fill)
+        self.update_positions_from_fill(fill)
+        self.update_holdings_from_fill(fill)
+        self.update_timeindex(fill)  # Force update of all_positions and all_holdings
 
     def generate_naive_order(self, signal: SignalEvent):
         """
@@ -547,52 +545,51 @@ class NaivePortfolio(Portfolio):
         Parameters:
         signal - The SignalEvent signal information.
         """
-        if not isinstance(signal, SignalEvent):
-            return
         if signal.datetime < self.start_date:
-            return      # Do not trade before start date
+            return  # Do not trade before start date
 
         symbol = signal.symbol
-        direction = signal.signal_type      # buy=1, neutral=0, sell=-1
-        strength = signal.strength
+        direction = signal.signal_type  # buy=1, neutral=0, sell=-1
         # Leave 5% of capital out for commissions, etc
         # Consider leverage
-        # TODO: manage lots here
-        mkt_quantity = floor(0.95 * self.initial_capital / len(self.symbol_list) /
-                             self.bars.get_latest_bars(signal.symbol)[0].close * strength
-                             * 0.2)     # 20% of leverage
         cur_position = self.current_positions[symbol]
         # order_type = 'MKT'
-        limit_price = None      # Price limit for a market order is None
-
+        limit_price = None  # Price limit for a market order is None
+        mkt_quantity = self.calculate_order_size(signal)
         desired_position = mkt_quantity * direction.value
-        if self.instrument == InstrumentType.Stock:     # For stocks, positions cannot be negative
+        if self.instrument == InstrumentType.Stock:  # For stocks, positions cannot be negative
             desired_position = max(0, desired_position)
         order_quantity = desired_position - cur_position
         if order_quantity != 0:
             order = OrderEvent(symbol, limit_price, order_quantity, instrument=self.instrument)
             return order
         else:
-            return None     # No order is sent if positions does not change
+            return None  # No order is sent if positions does not change
 
-    def update_signal(self, event):
+    def calculate_order_size(self, signal: SignalEvent) -> float:
+        """Gets the order size (number of lots to buy/sell), without sign"""
+        # TODO: manage lots here
+        mkt_quantity = floor(0.95 * self.initial_capital / len(self.symbol_list) /
+                             self.bars.get_latest_bars(signal.symbol)[0].close * signal.strength
+                             * 0.2)  # 20% of leverage
+        return mkt_quantity
+
+    def update_signal(self, event: SignalEvent):
         """
         Acts on a SignalEvent to generate new orders
         based on the portfolio logic.
         """
-        # if event.type == 'SIGNAL':
-        if isinstance(event, SignalEvent):
-            if event.datetime >= self.start_date:        # skip signals before start date
-                last_signal = self.signals[-1] if self.signals else None
-                if not (last_signal is not None and event.symbol in last_signal
-                        and last_signal[event.symbol] == event.strength * event.signal_type.value):
-                    order_event = self.generate_naive_order(event)
-                    if order_event:
-                        self.events.put(order_event)
-                signal = {"datetime": event.datetime, event.symbol: event.strength * event.signal_type.value}
-                # Only record signal changes
-                if not self.signals or self.signals[-1].get(event.symbol, -1) != signal.get(event.symbol, 0):
-                    self.signals.append(signal)
+        if event.datetime >= self.start_date:  # skip signals before start date
+            last_signal = self.signals[-1] if self.signals else None
+            if not (last_signal is not None and event.symbol in last_signal
+                    and last_signal[event.symbol] == event.strength * event.signal_type.value):
+                order_event = self.generate_naive_order(event)
+                if order_event:
+                    self.events.put(order_event)
+            signal = {"datetime": event.datetime, event.symbol: event.strength * event.signal_type.value}
+            # Only record signal changes
+            if not self.signals or self.signals[-1].get(event.symbol, -1) != signal.get(event.symbol, 0):
+                self.signals.append(signal)
 
     def create_equity_curve_dataframe(self):
         """
@@ -603,14 +600,14 @@ class NaivePortfolio(Portfolio):
         curve.set_index('datetime', inplace=True)
         curve['returns'] = curve['total'].pct_change()
         curve['equity_curve'] = (1.0 + curve['returns']).cumprod()
-        curve['gross_returns'] = curve['cash'].pct_change()
-        curve['gross_equity_curve'] = (1.0 + curve['gross_returns']).cumprod()
+        # curve['gross_returns'] = curve['cash'].pct_change()
+        # curve['gross_equity_curve'] = (1.0 + curve['gross_returns']).cumprod()
         self.equity_curve = curve
 
     def get_analysis(self) -> OutputAnalyzer:
         if self.equity_curve is None:
             self.create_equity_curve_dataframe()
-        analysis = OutputAnalyzer(equity_curve=self.equity_curve['total'])
+        analysis = OutputAnalyzer(cash_curve=self.equity_curve['total'])
         return analysis
 
     def output_summary_stats(self, plot=True, model_name: str = ""):
@@ -631,10 +628,10 @@ class NaivePortfolio(Portfolio):
         print(stats)
         if plot:
             analysis.plot(positions=df_pos, prices=df_bars, symbol=self.symbol_list[0], model_name=model_name)
-        # return stats
+        return stats
 
         total_return = self.equity_curve['equity_curve'][-1]
-        gross_total_return = self.equity_curve['gross_equity_curve'][-1]
+        # gross_total_return = self.equity_curve['gross_equity_curve'][-1]
         returns = self.equity_curve['returns']
         pnl = self.equity_curve['equity_curve']
         # gross_pnl = self.equity_curve['gross_equity_curve']
@@ -646,13 +643,14 @@ class NaivePortfolio(Portfolio):
         #          ("Sharpe Ratio", "%0.2f" % sharpe_ratio),
         #          ("Max Drawdown", "%0.2f%%" % (max_dd * 100.0)),
         #          ("Drawdown Duration", "%d" % dd_duration)]
-        stats = [("Total Return %",  ((total_return - 1.0) * 100.0)),
+        stats = [("Total Return %", ((total_return - 1.0) * 100.0)),
                  # ("Gross total Return %",  ((gross_total_return - 1.0) * 100.0)),
-                 ("Sharpe Ratio",  sharpe_ratio),
-                 ("Max Drawdown %",  (max_dd * 100.0)),
+                 ("Sharpe Ratio", sharpe_ratio),
+                 ("Max Drawdown %", (max_dd * 100.0)),
                  ("Drawdown Duration", dd_duration),
                  ("Total Return", returns[-1])
                  ]
+        print(stats)
 
         if True or (False and plot):
             df_pos = pd.DataFrame(self.all_positions)
@@ -681,3 +679,22 @@ class NaivePortfolio(Portfolio):
             fig.show()
 
         return stats
+
+
+class ConstantSizeNaivePortfolio(NaivePortfolio):
+    """Same as naive portfolio, but positions have constant size equal to the amount of stocks that can be
+    dealt with at the price of the first bar"""
+
+    def __init__(self, broker, bars, events, start_date, instrument=InstrumentType.Stock, initial_capital=100000.0):
+        super().__init__(broker, bars, events, start_date, instrument, initial_capital)
+        self.order_size = dict()
+
+    def calculate_order_size(self, signal: SignalEvent) -> float:
+        """Order size is calculated splitting capital proportional to close price of all symbols when first signal
+        is received, so all symbols have the same market size"""
+        if not self.order_size:
+            prices = (self.bars.get_latest_bars(symbol)[-1].close for symbol in self.symbol_list)
+            for symbol in self.symbol_list:
+                self.order_size[symbol] = (self.initial_capital / sum(prices))
+        mkt_quantity = self.order_size[signal.symbol]
+        return mkt_quantity

@@ -18,7 +18,8 @@ class Test(TestCase):
     def setUpClass(cls) -> None:
         cls.model = tf.keras.models.load_model(ModelConfig.model_path(True))
         cls.trading_env, cls.ddqna = create_tradingenv_ddqn()
-        cls.bt_train, cls.bt_test = create_train_test_backtesters()
+        # For testing commission will be 0
+        cls.bt_train, cls.bt_test = create_train_test_backtesters(commission_rel=0)
         cls.bt_test.reset()
 
     def test_same_models(self):
@@ -103,11 +104,34 @@ class Test(TestCase):
         :param check_test_data: if True, data for test period will be used (defaults to True
         :return: None
         """
+        training_res = Evaluator(self.ddqna, self.trading_env.data_source)
         for data_type, bt, backtesting_ptf in self.iter_backtesting(check_train_data=check_train_data,
                                                                     check_test_data=check_test_data):
-            training_res = Evaluator(self.ddqna, self.trading_env.data_source)
-            training_oa = training_res.output_analyser[data_type]['strategy']
+            training_output = training_res.output_analyser[data_type]['strategy']
             backtesting_ptf.create_equity_curve_dataframe()
-            backtesting_oa = backtesting_ptf.get_analysis()
+            backtesting_output = backtesting_ptf.get_analysis()
+            ##############################
+            #   Check positions
+            ##############################
+            backtesting_pos = np.sign(pd.DataFrame(backtesting_ptf.all_positions).iloc[:, 0].values)
+            training_pos = training_res.positions[data_type]
+            self.assertTrue(np.allclose(backtesting_pos[1:], training_pos),
+                            "Positions are not the same")
+            ###################################
+            #   Check pnl (using returns)
+            ###################################
+            self.assertTrue(np.allclose(backtesting_ptf.equity_curve['returns'].values[1:],
+                                        backtesting_output.returns[1:]),
+                            "Backtesting portfolio and output analyser give different results")
             # Just to check both charts are the same
             backtesting_ptf.output_summary_stats(plot=True)
+            bt_ret = backtesting_output.returns[1:]
+            tr_ret = training_output.returns
+            zero_rets = abs(tr_ret) < 1e-9
+            self.assertTrue(np.allclose(bt_ret[zero_rets], tr_ret[zero_rets]),
+                            "Zero returns are not the same")
+            # Non zero returns must be proportional
+            non_zero_rets = ~ zero_rets
+            factors = bt_ret[non_zero_rets] / tr_ret[non_zero_rets]
+            self.assertTrue((factors.max() - factors.min()) / factors.mean() < .001,
+                            "Calculated returns are not proportional")

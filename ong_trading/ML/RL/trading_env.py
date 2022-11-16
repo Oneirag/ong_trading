@@ -74,7 +74,7 @@ class DataSource:
         self.model_name = model_name
         self.ticker = ticker
         self.trading_days = trading_days
-        self.data_source = YahooHistoricalData(None, [self.ticker])
+        self.data_source = YahooHistoricalData(None, self.ticker)
         self.preprocessor = preprocessor()
 
         validation_start = validation_start or test_start

@@ -84,20 +84,21 @@ class SimulatedExecutionHandler(ExecutionHandler):
         Parameters:
         event - Contains an Event object with order information.
         """
-        if isinstance(event, OrderEvent):
-            fill_event = FillEvent(datetime.datetime.utcnow(), event.symbol,
-                                   self.exchange_name, event.quantity, event.direction, None)
-            self.events.put(fill_event)
+        # TODO: this doesn't work. Neither execution price nor commissions are currently part of OrderEvent
+        fill_event = FillEvent(datetime.datetime.utcnow(), event.symbol,
+                               self.exchange_name, event.quantity, event.direction, None)
+        self.events.put(fill_event)
 
 
 class SimulatedBroker(ExecutionHandler):
 
-    def __init__(self, bars: DataHandler, events, cash):
+    def __init__(self, bars: DataHandler, events, cash, commission_rel: float = 0.01):
         """
         Creates a new broker
         :param bars: market data
         :param events: events queue (to notify closed deals)
         :param cash: initial cash sent to the broker
+        :param commission_rel: commission relative to current bar price (defaults to 1%)
         """
         self.bars = bars
         self.events = events
@@ -106,6 +107,7 @@ class SimulatedBroker(ExecutionHandler):
         self.cash = cash
         self.initial_cash = cash
 
+        self.commission_rel = commission_rel
         # TODO: management of working orders
         self.working_orders = list()
         self.trade_history = {s: list() for s in bars.symbol_list}
@@ -179,9 +181,9 @@ class SimulatedBroker(ExecutionHandler):
                 # TODO: implement limit order execution
                 self.log_error("Limit order not implemented", order=order)
                 continue
-            commission = trade_price * 0.01  # TODO: improve commission calculation
+            commission = self.calculate_commission(order, trade_price)
             position = self.positions.get(order.symbol, 0)
-            new_position = position + order.quantity # order.direction.value * order.quantity
+            new_position = position + order.quantity    # order.direction.value * order.quantity
             cost = None
             if order.instrument == InstrumentType.Stock:
                 if new_position < 0:
@@ -210,3 +212,10 @@ class SimulatedBroker(ExecutionHandler):
                 else:
                     self.log_not_filled_order(order, "Insufficient cash position to negotiate")
             pass
+
+    def calculate_commission(self, order: OrderEvent, trade_price: float) -> float:
+        """Returns commission for the current order"""
+        commission = trade_price * self.commission_rel  # TODO: improve commission calculation
+        return commission
+
+
