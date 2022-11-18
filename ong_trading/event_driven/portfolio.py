@@ -10,7 +10,7 @@ from math import floor
 
 from ong_trading.event_driven.event import FillEvent, OrderEvent, SignalEvent, MarketEvent
 from ong_trading.event_driven.performance import create_sharpe_ratio, create_drawdowns, OutputAnalyzer
-from ong_trading.event_driven.utils import InstrumentType, DirectionType, plot_chart
+from ong_trading.event_driven.utils import InstrumentType, DirectionType, plot_chart, get_leverage
 
 
 class Portfolio(ABC):
@@ -399,6 +399,8 @@ class NaivePortfolio(Portfolio):
         if self.instrument not in InstrumentType.__members__.values():
             raise ValueError(f"Instrument {self.instrument} not valid")
 
+        self.leverage = {symbol: get_leverage(instrument, symbol) for symbol in self.bars.symbol_list}
+
         self.signals = list()  # keep record of signals
 
     def construct_all_positions(self):
@@ -467,20 +469,8 @@ class NaivePortfolio(Portfolio):
 
         # Read total from broker
         dh['total'] = self.broker.cash
-
-        # for s in self.symbol_list:
-        #     # TODO: use bid/offer depending on the sign of the current position
-        #     # Approximation to the real value
-        #     if self.instrument == InstrumentType.Stock:
-        #         market_value = self.current_positions[s] * bars[s][-1].close
-        #     elif self.instrument == InstrumentType.CfD:
-        #         if len(bars[s]) > 1:
-        #             market_value = self.current_positions[s] * (bars[s][-1].close - bars[s][-2].close)
-        #         else:
-        #             market_value = 0
-        #
-        #     dh[s] = market_value
-        #     dh['total'] += market_value
+        for symbol in self.symbol_list:
+            dh[symbol] = self.broker.pnl[symbol]       # Keeps also per symbol pnl
 
         # Append the current positions
         if dh['datetime'] == self.all_holdings[-1]['datetime']:
@@ -507,19 +497,6 @@ class NaivePortfolio(Portfolio):
         Parameters:
         fill - The FillEvent object to update the holdings with.
         """
-
-        # # Update holdings list with new quantities
-        # # fill_cost = self.bars.get_latest_bars(fill.symbol)[0][5]  # Close price
-        # # TODO: this cost depends if instrument is equity or a CFD. This is Equity cost (full cost)
-        # print(fill.fill_cost)
-        # fill_cost = self.bars.get_latest_bars(fill.symbol)[-1].close  # Close price
-        # if self.instrument == InstrumentType.Stock:
-        #     cost = fill.position * fill_cost * fill.quantity
-        # elif self.instrument == InstrumentType.CfD:
-        #     # TODO: CfD is hardcoded to cost just 20% of total quantity (5x leverage)
-        #     cost = fill.position * fill_cost * fill.quantity * 0.2
-        # else:
-        #     cost = 0
         cost = fill.fill_cost
         self.current_holdings[fill.symbol] += cost
         commission = fill.commission or 0
@@ -568,10 +545,9 @@ class NaivePortfolio(Portfolio):
 
     def calculate_order_size(self, signal: SignalEvent) -> float:
         """Gets the order size (number of lots to buy/sell), without sign"""
-        # TODO: manage lots here
         mkt_quantity = floor(0.95 * self.initial_capital / len(self.symbol_list) /
                              self.bars.get_latest_bars(signal.symbol)[0].close * signal.strength
-                             * 0.2)  # 20% of leverage
+                             * self.leverage[signal.symbol])
         return mkt_quantity
 
     def update_signal(self, event: SignalEvent):
@@ -630,60 +606,10 @@ class NaivePortfolio(Portfolio):
             analysis.plot(positions=df_pos, prices=df_bars, symbol=self.symbol_list[0], model_name=model_name)
         return stats
 
-        total_return = self.equity_curve['equity_curve'][-1]
-        # gross_total_return = self.equity_curve['gross_equity_curve'][-1]
-        returns = self.equity_curve['returns']
-        pnl = self.equity_curve['equity_curve']
-        # gross_pnl = self.equity_curve['gross_equity_curve']
-
-        sharpe_ratio = create_sharpe_ratio(returns)
-        max_dd, dd_duration, *_ = create_drawdowns(pnl)
-
-        # stats = [("Total Return", "%0.2f%%" % ((total_return - 1.0) * 100.0)),
-        #          ("Sharpe Ratio", "%0.2f" % sharpe_ratio),
-        #          ("Max Drawdown", "%0.2f%%" % (max_dd * 100.0)),
-        #          ("Drawdown Duration", "%d" % dd_duration)]
-        stats = [("Total Return %", ((total_return - 1.0) * 100.0)),
-                 # ("Gross total Return %",  ((gross_total_return - 1.0) * 100.0)),
-                 ("Sharpe Ratio", sharpe_ratio),
-                 ("Max Drawdown %", (max_dd * 100.0)),
-                 ("Drawdown Duration", dd_duration),
-                 ("Total Return", returns[-1])
-                 ]
-        print(stats)
-
-        if True or (False and plot):
-            df_pos = pd.DataFrame(self.all_positions)
-            df_pos.set_index('datetime', inplace=True)
-
-            bars = self.bars.get_latest_bars(self.bars.symbol_list[0], N=None)
-            df_bars = pd.DataFrame(bars).set_index("timestamp")
-            df_bars = df_bars.reindex(index=df_pos.index, method='pad')
-            from plotly.subplots import make_subplots
-            df_signals = pd.DataFrame(self.signals).set_index("datetime").reindex(index=df_bars.index)
-
-            fig = make_subplots(rows=3, cols=1,
-                                shared_xaxes=True,
-                                # vertical_spacing=0.02,
-                                # specs=[[{}], [{}]],
-                                subplot_titles=["Positions", "PnL", "Prices"])
-
-            symbol = self.symbol_list[0]
-
-            plot_chart(fig, x=df_pos.index, y=df_pos[symbol], name=symbol, row=1, col=1, symbol=symbol)
-            # plot_chart(fig, x=df_pos.index, y=self.equity_curve['cash'], name="Gross", row=2, col=1, symbol=symbol)
-            plot_chart(fig, x=df_pos.index, y=self.equity_curve['total'], name="Total", row=2, col=1, symbol=symbol)
-            plot_chart(fig, x=df_bars.index, y=df_bars.close, name="Close", row=3, col=1,
-                       signals=df_signals[symbol], symbol=symbol)
-
-            fig.show()
-
-        return stats
-
 
 class ConstantSizeNaivePortfolio(NaivePortfolio):
     """Same as naive portfolio, but positions have constant size equal to the amount of stocks that can be
-    dealt with at the price of the first bar"""
+    dealt at the price of the first signal"""
 
     def __init__(self, broker, bars, events, start_date, instrument=InstrumentType.Stock, initial_capital=100000.0):
         super().__init__(broker, bars, events, start_date, instrument, initial_capital)

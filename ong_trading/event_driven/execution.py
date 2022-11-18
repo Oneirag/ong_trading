@@ -7,7 +7,7 @@ import datetime
 
 from abc import ABC, abstractmethod
 
-from .event import FillEvent, OrderEvent, MarketEvent, UserNotifyEvent
+from .event import FillEvent, OrderEvent, MarketEvent, UserNotifyEvent, OutOfCashEvent
 from ong_trading.event_driven.utils import InstrumentType
 from ong_trading.event_driven.data import DataHandler
 from ong_trading import logger
@@ -64,7 +64,7 @@ class SimulatedExecutionHandler(ExecutionHandler):
     handler.
     """
 
-    exchange_name = "ARCA"      # Just for backtesting purposes, just a placeholder
+    exchange_name = "ARCA"  # Just for backtesting purposes, just a placeholder
 
     def __init__(self, events):
         """
@@ -104,6 +104,7 @@ class SimulatedBroker(ExecutionHandler):
         self.events = events
         self.exchange_name = "oscar"
         self._positions = {s: 0 for s in bars.symbol_list}
+        self.pnl = {s: 0 for s in bars.symbol_list}  # Last mtm of all symbols
         self.cash = cash
         self.initial_cash = cash
 
@@ -112,6 +113,7 @@ class SimulatedBroker(ExecutionHandler):
         self.working_orders = list()
         self.trade_history = {s: list() for s in bars.symbol_list}
         self.has_positions = False
+        self.has_cash = True
 
     @property
     def positions(self):
@@ -137,11 +139,16 @@ class SimulatedBroker(ExecutionHandler):
             last_bar = self.bars.get_latest_bars(symbol, N=1)[-1]
             position = self.positions[symbol]
             if position > 0:
-                worse_price = last_bar.low
+                worse_price = last_bar.low_bid
+                close_price = last_bar.close_bid
             else:
-                worse_price = last_bar.high
+                worse_price = last_bar.high_ask
+                close_price = last_bar.close_ask
             worse_pnl += self.value_pnl_trades(symbol, worse_price)
-            close_pnl += self.value_pnl_trades(symbol, last_bar.close)
+            symbol_close_pnl = self.value_pnl_trades(symbol, close_price)
+            close_pnl += symbol_close_pnl
+            self.pnl[symbol] = symbol_close_pnl
+
         if worse_pnl + self.initial_cash < 0:
             # Close all positions due to lack of cash (for CfD)
             # It is very extreme as simulates that high price in short positions happens at the same time as
@@ -149,9 +156,12 @@ class SimulatedBroker(ExecutionHandler):
             close_event = UserNotifyEvent("Closing positions due to negative cash")
             self.log_error(close_event.msg)
             self.events.put(close_event)
-            self.positions = {s: 0 for s in self.bars.symbol_list}
-            self.cash = 0
+            self._positions = {s: 0 for s in self.bars.symbol_list}
+            # self.cash = 0
+            self.cash = self.initial_cash + close_pnl   # It might not be zero , so self.has_cash is set to False
+            self.events.put(OutOfCashEvent())
             self.has_positions = False
+            self.has_cash = False
             return
 
         self.cash = close_pnl + self.initial_cash
@@ -159,8 +169,9 @@ class SimulatedBroker(ExecutionHandler):
 
     def execute_order(self, event: OrderEvent):
         """Sends order to working orders internal queue. If executed, a FillEvent is sent to event queue"""
-        self.working_orders.append(event)
-        self.execute_working_orders()
+        if self.has_cash:           # If cash was negative no additional order can be executed
+            self.working_orders.append(event)
+            self.execute_working_orders()
 
     def execute_working_orders(self):
         """
@@ -173,9 +184,12 @@ class SimulatedBroker(ExecutionHandler):
                 self.log_not_filled_order(order, "No cash available")
                 return
             current_bar = self.bars.get_latest_bars(order.symbol)[-1]
-            if order.limit_price is None:   # Market order
-                # TODO: implement bid-offer
-                trade_price = current_bar.close  # Orders are supposed to be closed at close price
+            if order.limit_price is None:  # Market order
+                # Orders are supposed to be closed at market close (with its bid/ask)
+                if order.quantity > 0:
+                    trade_price = current_bar.close_ask
+                else:
+                    trade_price = current_bar.close_bid
             else:
                 # Check if limits make order to be executed
                 # TODO: implement limit order execution
@@ -183,7 +197,7 @@ class SimulatedBroker(ExecutionHandler):
                 continue
             commission = self.calculate_commission(order, trade_price)
             position = self.positions.get(order.symbol, 0)
-            new_position = position + order.quantity    # order.direction.value * order.quantity
+            new_position = position + order.quantity  # order.direction.value * order.quantity
             cost = None
             if order.instrument == InstrumentType.Stock:
                 if new_position < 0:
@@ -192,7 +206,7 @@ class SimulatedBroker(ExecutionHandler):
                 else:
                     cost = order.quantity * trade_price
             elif order.instrument == InstrumentType.CfD:
-                cost = 0  # TODO: No cash cost for a CfD (indeed, take bid offer into account)
+                cost = 0
             if cost is not None:
                 if self.cash > cost + commission:
                     fill_event = FillEvent(timeindex=current_bar.timestamp,
@@ -217,5 +231,3 @@ class SimulatedBroker(ExecutionHandler):
         """Returns commission for the current order"""
         commission = trade_price * self.commission_rel  # TODO: improve commission calculation
         return commission
-
-

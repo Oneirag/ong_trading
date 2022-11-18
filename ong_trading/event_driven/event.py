@@ -41,6 +41,11 @@ class BacktestingEndEvent(Event):
     pass
 
 
+class OutOfCashEvent(Event):
+    """Event sent when cash is negative so there cannot be any new deal and positions are automatically closed"""
+    pass
+
+
 class MarketEvent(Event):
     """
     Handles the event of receiving a new market update with

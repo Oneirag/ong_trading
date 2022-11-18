@@ -13,9 +13,9 @@ from ong_trading.event_driven.execution import SimulatedBroker
 from ong_trading.event_driven.portfolio import ConstantSizeNaivePortfolio
 
 
-def create_train_test_backtesters(commission_rel=None):
+def create_train_test_backtesters(commission_rel=None, cash=7000):
     test_kwargs = dict(
-        cash=7000, symbol_list=ModelConfig.ticker, strategy_class=MachineLearningStrategy,
+        cash=cash, symbol_list=ModelConfig.ticker, strategy_class=MachineLearningStrategy,
         start_date=pd.Timestamp(ModelConfig.test_start),
         strategy_kwargs=dict(model_path=ModelConfig.model_path(True),
                              preprocessor=MLPreprocessor.load(

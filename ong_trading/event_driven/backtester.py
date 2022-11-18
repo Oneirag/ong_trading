@@ -17,7 +17,7 @@ from ong_trading.event_driven.portfolio import NaivePortfolio
 from ong_trading.strategy.strategy import Strategy
 from ong_trading.event_driven.execution import SimulatedBroker
 from ong_trading.event_driven.event import FillEvent, OrderEvent, SignalEvent, MarketEvent, UserNotifyEvent, \
-    BacktestingEndEvent
+    BacktestingEndEvent, OutOfCashEvent
 from ong_trading.helpers.overload import singledispatch
 from ong_trading.event_driven.utils import InstrumentType
 
@@ -73,6 +73,7 @@ class Backtester:
         self.last_processed_timestamp = None
         self.timer = OngTimer(logger=logger)
         self.timer_name = "Backtesting"
+        self.has_cash = True
 
     def reset(self):
         """Needed for running tests on this class"""
@@ -81,6 +82,7 @@ class Backtester:
     def __init_objects(self, init_broker=True, init_portfolio=True, init_strategy=True,
                        strategy_args=None,
                        strategy_kwargs=None):
+        self.has_cash = True
         self.last_processed_timestamp = None
         if init_broker and self.broker_class:
             self.broker = self.broker_class(self.data, self.events, self.cash)
@@ -105,7 +107,7 @@ class Backtester:
             self.last_processed_timestamp = event.timestamp
         except:
             pass
-        if self.strategy:
+        if self.strategy and self.has_cash:
             self.strategy.calculate_signals(event)
         if self.broker:
             self.broker.update_timeindex(event)
@@ -113,6 +115,10 @@ class Backtester:
             self.portfolio.update_timeindex(event)
         if self.data.continue_backtest:
             self.dates.append(event.timestamp)
+
+    @singledispatch(OutOfCashEvent)
+    def process_event(self, event: OutOfCashEvent):
+        self.has_cash = False
 
     @singledispatch(SignalEvent)
     def process_event(self, event: SignalEvent):

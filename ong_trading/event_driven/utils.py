@@ -11,6 +11,11 @@ class InstrumentType(Enum):
     CfD = "CfD"
 
 
+def get_leverage(instrument: InstrumentType, symbol: str) -> int:
+    """Returns leverage. For cfd will be 5. Symbol is currently not used"""
+    return 1 if instrument == InstrumentType.Stock else 5
+
+
 class DirectionType(Enum):
     BUY = 1
     SELL = -1

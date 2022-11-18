@@ -6,10 +6,12 @@ from unittest import TestCase
 import tensorflow as tf
 import numpy as np
 import pandas as pd
+import plotly.express as px
 
 from ong_trading.ML.RL.rl_train import create_tradingenv_ddqn, Evaluator
 from ong_trading.ML.RL.config import ModelConfig
 from ong_trading.ML.RL.rl_backtest import create_train_test_backtesters
+from ong_trading.vectorized.pnl import pnl_positions
 
 
 class Test(TestCase):
@@ -19,7 +21,7 @@ class Test(TestCase):
         cls.model = tf.keras.models.load_model(ModelConfig.model_path(True))
         cls.trading_env, cls.ddqna = create_tradingenv_ddqn()
         # For testing commission will be 0
-        cls.bt_train, cls.bt_test = create_train_test_backtesters(commission_rel=0)
+        cls.bt_train, cls.bt_test = create_train_test_backtesters(commission_rel=0, cash=100)
         cls.bt_test.reset()
 
     def test_same_models(self):
@@ -133,5 +135,24 @@ class Test(TestCase):
             # Non zero returns must be proportional
             non_zero_rets = ~ zero_rets
             factors = bt_ret[non_zero_rets] / tr_ret[non_zero_rets]
+            fig = px.line(factors, title="Factors")
+            fig.show()
             self.assertTrue((factors.max() - factors.min()) / factors.mean() < .001,
                             "Calculated returns are not proportional")
+            pass
+
+    def test_pnl_backtesting(self):
+        """Checks that pnl of backtesting is correctly calculated"""
+        for data_type, bt, backtesting_ptf in self.iter_backtesting(check_train_data=True,
+                                                                    check_test_data=True):
+            backtesting_pos = pd.DataFrame(backtesting_ptf.all_positions).iloc[:, 0].values
+            backtesting_output = backtesting_ptf.get_analysis()
+            backtesting_prices = bt.data.to_pandas("ELE.MC")[bt.start_date:bt.end_date]
+            calculated_pnl = pnl_positions(backtesting_pos[-len(backtesting_prices):],
+                                           backtesting_prices.close, backtesting_prices.close)
+            backtesting_pnl = pd.DataFrame(backtesting_ptf.all_holdings).set_index("datetime")['ELE.MC']
+            self.assertTrue(np.allclose(backtesting_pnl.iloc[-len(calculated_pnl):], calculated_pnl),
+                            f"Pnl with two different calculations do not match for {data_type}")
+            backtesting_output_pnl = backtesting_output.cash_curve - backtesting_output.cash_curve[0]
+            self.assertTrue(np.allclose(backtesting_pnl, backtesting_output_pnl),
+                            f"Pnl of portfolio and output do not match for {data_type}")
